@@ -4,7 +4,10 @@
 
 A quiet, shared 3D lakeside game. Walk around the lake, fish, gather branches and stones, build a campfire, grill your catch, and meet other visitors. It runs in a browser on desktop and mobile, with no signup required.
 
-This project is completely open source. To try it with your own Skapi project, replace `SKAPI_PROJECT_ID` in `index.html` with your project ID.
+This project is completely open source. 
+
+**IMPORTANT**: Replace `SKAPI_PROJECT_ID` in `index.html` with your own project ID.
+
 
 ## How it was built
 
@@ -26,5 +29,3 @@ npm run dev
 ```
 
 Then visit [http://localhost:5173](http://localhost:5173).
-
-The app uses a Skapi project ID configured in `index.html`; Skapi Realtime requires a network connection. If the initial connection fails, you can enter your own project ID when prompted. Create a project at [skapi.com](https://skapi.com) to get an ID; the replacement is saved in your browser.

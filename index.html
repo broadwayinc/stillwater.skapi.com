@@ -423,13 +423,11 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.152.2/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/skapi-js@2.2.28/dist/skapi.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/skapi-js@2.2.25/dist/skapi.js"></script>
 <script>
 (function () {
   'use strict';
-  const DEFAULT_SKAPI_PROJECT_ID = '';
-  let SKAPI_PROJECT_ID = DEFAULT_SKAPI_PROJECT_ID;
-  const SKAPI_PROJECT_ID_KEY = 'lake.skapiProjectId';
+  const SKAPI_PROJECT_ID = '5Aj23WAASla3eFEcZq-7Zd6TgdLUaFxseKMT1qveY';
   const GROUP = 'stillwater-lake';
 
   // ---------------------------------------------------------------- helpers
@@ -441,7 +439,6 @@
   const TAU = Math.PI * 2;
   function angleLerp(a, b, t) { let d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI; return a + d * t; }
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
-  SKAPI_PROJECT_ID = store(SKAPI_PROJECT_ID_KEY) || SKAPI_PROJECT_ID;
   function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   const CTRL_RE = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e]', 'g');
   function cleanText(s, max) { return String(s || '').replace(CTRL_RE, '').trim().slice(0, max); }
@@ -2033,66 +2030,24 @@
   let skapi = null;    // one SDK instance for the life of the page
   let myUser = null;
   let lost = false;    // the account ended; the opening dialog is back up and the next walk-in reconnects
-  let skapiProjectRevision = 0;
-  let skapiGroupJoined = false, groupJoinWaiter = null;
+  async function openRealtime() {
+    await skapi.connectRealtime(onRealtime);
+    await skapi.joinRealtime({ group: GROUP });
+  }
   async function connectSkapi() {
     if (typeof Skapi !== 'function') throw new Error('Skapi SDK not loaded');
     if (!skapi) skapi = new Skapi(SKAPI_PROJECT_ID, { autoLogin: true });
-    const client = skapi, revision = skapiProjectRevision;
-    const isCurrent = () => client === skapi && revision === skapiProjectRevision;
-    const handleRealtime = (rt) => {
-      if (!isCurrent()) return;
-      onRealtime(rt);
-      if (rt && rt.type === 'notice' && rt.code === 'USER_JOINED' && rt.sender === client.user?.user_id && rt.sender_rid === GROUP) {
-        skapiGroupJoined = true;
-        if (groupJoinWaiter) { groupJoinWaiter.resolve(); groupJoinWaiter = null; }
-        if (skapiConnectedOnce) { net.status('live', 'Shared lake'); net.dirty = true; }
-      } else if (rt && rt.type === 'error' && groupJoinWaiter) {
-        groupJoinWaiter.reject(new Error(rt.message || 'Skapi realtime connection failed'));
-        groupJoinWaiter = null;
-      }
-    };
-    const joinRealtimeAndWait = async () => {
-      let resolve, reject;
-      const joined = new Promise((res, rej) => { resolve = res; reject = rej; });
-      groupJoinWaiter = { resolve, reject };
-      skapiGroupJoined = false;
-      await client.connectRealtime(handleRealtime);
-      if (!isCurrent()) return;
-      await client.joinRealtime({ group: GROUP });
-      let timeoutId;
-      try {
-        await Promise.race([joined, new Promise((_, rej) => { timeoutId = setTimeout(() => rej(new Error('Timed out waiting for Skapi group join confirmation')), 10000); })]);
-      } finally { clearTimeout(timeoutId); }
-      if (groupJoinWaiter) groupJoinWaiter = null;
-    };
-    const connectionInfo = await client.getConnectionInfo({ refresh: true });
-    if (!isCurrent()) return;
-    if (!connectionInfo || connectionInfo.project_id !== SKAPI_PROJECT_ID) throw new Error('Skapi project ID could not be verified');
-    if (!(await client.verifyAnonymousSession())) {
-      if (!isCurrent()) return;
-      await client.anonymousLogin(); // a restored account that was swept comes back as null
-    }
-    if (!isCurrent()) return;
-    myUser = client.user && client.user.user_id;
-    if (!myUser) throw new Error('Skapi did not create an anonymous session');
-    try {
-      await joinRealtimeAndWait();
-    }
+    if (!(await skapi.verifyAnonymousSession())) await skapi.anonymousLogin(); // a restored account that was swept comes back as null
+    try { await openRealtime(); }
     catch (e) {
-      if (!isCurrent()) return;
-      if (client.user) throw e;       // the account is fine; the network is not. connect() tries again later
-      await client.anonymousLogin();  // the account died between the check and the connection: start a fresh one
-      if (!isCurrent()) return;
-      myUser = client.user && client.user.user_id;
-      if (!myUser) throw new Error('Skapi did not create an anonymous session');
-      await joinRealtimeAndWait();
+      if (skapi.user) throw e;       // the account is fine; the network is not. connect() tries again later
+      await skapi.anonymousLogin();  // the account died between the check and the connection: start a fresh one
+      await openRealtime();
     }
-    if (!isCurrent()) { try { await client.closeRealtime(); } catch (e) { /* already closed */ } return; }
-    if (!skapiGroupJoined) throw new Error('Skapi did not confirm the group join');
+    myUser = skapi.user && skapi.user.user_id;
     net.transport = 'skapi';
-    net.sendFn = (d) => client.postRealtime(Object.assign({ id: myId }, d), GROUP);
-    net.leaveFn = () => { try { client.closeRealtime(); } catch (e) { /* ignore */ } };
+    net.sendFn = (d) => skapi.postRealtime(Object.assign({ id: myId }, d), GROUP);
+    net.leaveFn = () => { try { skapi.closeRealtime(); } catch (e) { /* ignore */ } };
     net.status('live', 'Shared lake');
     net.dirty = true;
   }
@@ -2113,12 +2068,9 @@
       } else if (rt.type === 'error' && !skapi.user) {
         sessionLost(); // the SDK signed the session out: the account is gone
       } else if (rt.type === 'close' || rt.type === 'error' || rt.type === 'reconnect') {
-        skapiGroupJoined = false;
         net.status('connecting', 'Reconnecting'); // 'reconnect' means an attempt is scheduled, not that it worked
       } else if (rt.type === 'success') {
-        if (skapiConnectedOnce && skapiGroupJoined) {
-          net.status('live', 'Shared lake'); net.dirty = true; net.lastFull = 0;
-        } else net.status('connecting', 'Joining lake');
+        net.status('live', 'Shared lake'); net.dirty = true; net.lastFull = 0;
       }
   }
   async function sessionLost() {
@@ -2167,80 +2119,25 @@
     net.leaveFn = () => lake.leave && lake.leave();
   }
 
-  let connecting = false, soloNoted = false, skapiConnectedOnce = false;
-  async function offerProjectIdChange(defaultId = SKAPI_PROJECT_ID) {
-    if (skapiConnectedOnce || typeof Skapi !== 'function') return false;
-    const enteredId = prompt('Enter your Skapi project ID:', defaultId);
-    if (enteredId === null) return false;
-    const projectId = enteredId.trim();
-    if (!projectId) return offerProjectIdChange(defaultId);
-    if (projectId === SKAPI_PROJECT_ID && skapi) return false;
-    let newClient;
-    try {
-      newClient = new Skapi(projectId, { autoLogin: true });
-      const connectionInfo = await newClient.getConnectionInfo({ refresh: true });
-      if (!connectionInfo || connectionInfo.project_id !== projectId) throw new Error('Skapi project ID could not be verified');
-    } catch (e) {
-      console.warn('Stillwater Lake: invalid Skapi project ID,', e && (e.message || e.code || e));
-      return offerProjectIdChange(projectId);
-    }
-    const previousClient = skapi;
-    SKAPI_PROJECT_ID = projectId;
-    skapiProjectRevision++;
-    skapi = newClient;
-    net.sendFn = null; net.leaveFn = null; net.transport = null;
-    if (previousClient) {
-      try { await previousClient.closeRealtime(); } catch (e) { /* already closed */ }
-      try { if (previousClient.user) await previousClient.logout(); } catch (e) { /* signed out locally either way */ }
-    }
-    store(SKAPI_PROJECT_ID_KEY, projectId);
-    return true;
-  }
+  let connecting = false, retryT = 0, soloNoted = false;
   async function connect() {
+    clearTimeout(retryT);
     if (connecting) return;
     connecting = true;
-    let retryWithUpdatedProject = false;
     const inViewer = !!(window.claude && typeof window.claude.use === 'function');
     const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
     try {
       if (inViewer) await Promise.race([connectRoom(), timeout(12000)]);
-      else {
-        await Promise.race([connectSkapi(), timeout(15000)]);
-        if (net.transport !== 'skapi' || net.mode !== 'live') throw new Error('Skapi connection was not established');
-        skapiConnectedOnce = true;
-      }
-      if (pendingEnter) {
-        pendingEnter = false;
-        enterLake();
-      }
+      else await Promise.race([connectSkapi(), timeout(15000)]);
     } catch (e) {
-      if (!inViewer && !skapiConnectedOnce) {
-        const failedClient = skapi;
-        skapi = null;
-        skapiProjectRevision++;
-        skapiGroupJoined = false;
-        groupJoinWaiter = null;
-        net.transport = null; net.sendFn = null; net.leaveFn = null;
-        if (failedClient) {
-          try { await failedClient.closeRealtime(); } catch (closeError) { /* already closed */ }
-          try { if (failedClient.user) await failedClient.logout(); } catch (logoutError) { /* signed out locally either way */ }
-        }
-        net.status('connecting', 'Connection failed');
-        retryWithUpdatedProject = await offerProjectIdChange();
-        if (!retryWithUpdatedProject) {
-          pendingEnter = false;
-          $('enter').disabled = false;
-          $('enter').textContent = 'Walk to the lake';
-        }
-      } else if (inViewer && net.mode !== 'live') {
+      if (net.mode !== 'live') {
         net.status('solo', 'On your own');
         if (!soloNoted) { soloNoted = true; log('The lake is yours alone right now. Others can still join later if the connection comes back.', 'sys'); }
+        // a failed first connection used to be final; keep trying quietly, so the lake fills in once the network is back
+        if (!inViewer) retryT = setTimeout(() => { if (net.mode !== 'live' && !lost) connect(); }, 20000);
       }
       console.warn('Stillwater Lake: multiplayer unavailable,', e && (e.message || e.code || e));
-    } finally {
-      connecting = false;
-      if (retryWithUpdatedProject) connect();
-    }
+    } finally { connecting = false; }
   }
   addEventListener('pagehide', () => { if (net.leaveFn) { try { net.leaveFn(); } catch (e) { /* ignore */ } } });
 
@@ -2326,20 +2223,9 @@
   $('photo').addEventListener('click', (e) => { if (e.target === $('photo')) closePhoto(); }); // a tap on the dim backdrop closes it
 
   // ---------------------------------------------------------------- main loop
-  let entered = false, pendingEnter = false;
+  let entered = false;
   function enterLake() {
     if (entered) return;
-    const inViewer = !!(window.claude && typeof window.claude.use === 'function');
-    if (!inViewer && (net.transport !== 'skapi' || net.mode !== 'live')) {
-      pendingEnter = true;
-      $('enter').disabled = true;
-      $('enter').textContent = 'Connecting...';
-      connect();
-      return;
-    }
-    pendingEnter = false;
-    $('enter').disabled = false;
-    $('enter').textContent = 'Walk to the lake';
     applyName($('wname').value);
     entered = true; $('welcome').classList.add('gone'); document.body.classList.add('entered');
     dropFocus();
