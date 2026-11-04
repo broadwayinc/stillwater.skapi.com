@@ -1,0 +1,22 @@
+{
+  "name": "stillwater.skapi.com",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "npx bns port=5173"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/broadwayinc/stillwater.skapi.com.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/broadwayinc/stillwater.skapi.com/issues"
+  },
+  "homepage": "https://github.com/broadwayinc/stillwater.skapi.com#readme",
+  "dependencies": {
+    "basic-node-server": "^1.1.1"
+  }
+}
