@@ -1,5 +1,7 @@
 # Stillwater Lake
 
+![Stillwater Lake](./og.jpg)
+
 A quiet, shared 3D lakeside game. Walk around the lake, fish, gather branches and stones, build a campfire, grill your catch, and meet other visitors. It runs in a browser on desktop and mobile, with no signup required.
 
 This project is completely open source. To try it with your own Skapi project, replace `SKAPI_PROJECT_ID` in `index.html` with your project ID.
