@@ -27,4 +27,4 @@ npm run dev
 
 Then visit [http://localhost:5173](http://localhost:5173).
 
-The app uses a Skapi project ID configured in `index.html`; Skapi Realtime requires a network connection.
+The app uses a Skapi project ID configured in `index.html`; Skapi Realtime requires a network connection. If the initial connection fails, you can enter your own project ID when prompted. Create a project at [skapi.com](https://skapi.com) to get an ID; the replacement is saved in your browser.
