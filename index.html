@@ -1612,6 +1612,7 @@
     say(myChar, text); net.event({ k: 'say', t: text }); // shown only as a bubble over the head, never in the log
   }
   tapify($('kindbtn'), sayKindWord);
+  tapify($('tally'), () => { $('tally').classList.remove('open'); $('bagbtn').setAttribute('aria-expanded', 'false'); });
   tapify($('bagbtn'), () => { const open = $('tally').classList.toggle('open'); $('bagbtn').setAttribute('aria-expanded', String(open)); });
 
   addEventListener('keydown', (e) => {
