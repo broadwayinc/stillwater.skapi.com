@@ -296,6 +296,8 @@
     border: 0; border-radius: 10px; padding: 13px 16px;
   }
   .wcard button:focus-visible, #cname:focus-visible, .swb:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+  .wcard .credits { margin-top: 18px; text-align: center; font-size: 12px; color: var(--drift); text-align: left;}
+  .wcard .credits a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
   .inapp { display: none; border: 1px solid rgba(242,179,90,.55); background: rgba(242,179,90,.12); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
   .inapp.show { display: block; }
   .inapp p { margin: 0 0 10px; color: var(--paper); font-size: 14px; max-width: none; }
@@ -388,9 +390,10 @@
 <div id="welcome">
   <div class="wcard glass">
     <div class="eyebrow">Open to everyone, no account</div>
-    <h2>Evening at Stillwater Lake</h2>
+    <h2 id="welcome-title">Stillwater Lake</h2>
+    <p>Come as you are. Cast a line, share a kind word, and let the quiet water give your spirit room to rest. We’re glad you’re here.</p>
     <p id="wnote" class="wnote" hidden>You were away for a while, so your spot at the lake was let go. Walk back in to rejoin everyone.</p>
-    <p>Walk down to the water, cast a line, gather branches and stones for a campfire, and grill what you catch while it burns. Anyone at the lake can sit down and eat from your grill, and every fish eaten earns an appreciation dance to share whenever you like. The light follows your own clock, and the land loops: walk over the ridge in any direction and you come back down to this same lake.</p>
+    <p>Walk down to the water, cast a line, gather branches and stones for a campfire, and grill what you catch while it burns. Anyone at the lake can sit down and eat from your grill, and every fish eaten earns an appreciation dance to share whenever you like.</p>
     <div id="inapp" class="inapp">
       <p>You are inside the <span id="inapp-name">app's</span> built-in browser. The lake works better in your normal browser.</p>
       <div class="row2"><a id="inapp-open" href="https://stillwater.skapi.com/" target="_blank" rel="noopener">Open in browser</a><button id="inapp-copy" class="ghost" type="button">Copy link</button></div>
@@ -406,7 +409,7 @@
       <span><kbd>Space</kbd></span><span>cast near water, then reel when it bites</span>
       <span><kbd>E</kbd><kbd>B</kbd><kbd>G</kbd></span><span>pick up or eat, build a campfire, grill a fish</span>
       <span><kbd>T</kbd></span><span>appreciation dance, one for every grilled fish you ate</span>
-      <span><kbd>Enter</kbd></span><span>say something kind to the lake</span>
+      <span><kbd>Enter</kbd></span><span>say something kind.</span>
       <span><kbd>P</kbd></span><span>take a photo to save or share</span>
     </div>
     <div class="keys keys-touch">
@@ -414,11 +417,15 @@
       <span>Tap ground</span><span>walk to that spot</span>
       <span>Pinch</span><span>zoom</span>
       <span><kbd>Cast</kbd></span><span>cast near water, tap again when it bites</span>
-      <span><kbd>Kind word</kbd></span><span>say something kind to the lake</span>
+      <span><kbd>Kind word</kbd></span><span>say something kind.</span>
       <span>Camera</span><span>take a photo to save or share</span>
       <span>Buttons</span><span>appear when there is something to pick up, cook or eat</span>
     </div>
     <button id="enter" type="button">Walk to the lake</button>
+    <div class="credits">
+      <a href="https://github.com/broadwayinc/stillwater-lake-game" target="_blank" rel="noopener noreferrer">GitHub Open Source</a>
+      <div>Built on <a href="https://skapi.com" target="_blank" rel="noopener noreferrer">skapi.com</a></div>
+    </div>
   </div>
 </div>
 
@@ -432,6 +439,15 @@
 
   // ---------------------------------------------------------------- helpers
   const $ = (id) => document.getElementById(id);
+  function setWelcomeGreeting() {
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 5 || hour >= 21 ? 'Night'
+      : hour < 8 ? 'Dawn'
+        : hour < 12 ? 'Morning'
+          : hour < 17 ? 'Afternoon' : 'Evening';
+    $('welcome-title').textContent = timeOfDay + ' at Stillwater Lake';
+  }
+  setWelcomeGreeting();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
