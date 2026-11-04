@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Open-in-browser test</title>
+<style>
+  body { margin: 0; font: 15px/1.4 -apple-system, system-ui, sans-serif; background: #0b1a20; color: #f3ead8; padding: 18px 16px 40px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: #b9c6c9; font-size: 13px; }
+  .m { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .m b { width: 24px; height: 24px; border-radius: 12px; background: #f2b35a; color: #0b1a20; font-size: 13px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .m a, .m button { flex: 1; font: 700 15px -apple-system, system-ui, sans-serif; padding: 14px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08); color: #f3ead8; text-align: center; text-decoration: none; }
+  .m a.hot, .m button.hot { background: #f2b35a; color: #0b1a20; border: 0; }
+  pre { background: rgba(0,0,0,.45); color: #9f9; font: 11px/1.35 ui-monospace, Menlo, monospace; padding: 8px; border-radius: 8px; white-space: pre-wrap; word-break: break-all; min-height: 120px; margin: 12px 0 0; }
+</style>
+</head>
+<body>
+<h1>Which hand-off does this browser allow?</h1>
+<p>Tap each button once. If the page leaves (Chrome opens), the log shows <b>LEFT</b>. If nothing happens, note the number and try the next. Come back here afterwards to see the log.</p>
+<div id="list"></div>
+<pre id="log"></pre>
+<script>
+  var UA = navigator.userAgent, lines = [], t0 = performance.now();
+  function log(s) { lines.push(((performance.now() - t0) / 1000).toFixed(2) + ' ' + s); if (lines.length > 18) lines.shift(); document.getElementById('log').textContent = 'UA: ' + UA + '\n' + lines.join('\n'); try { localStorage.setItem('open-test-log', lines.join('\n')); } catch (e) {} }
+  try { var prev = localStorage.getItem('open-test-log'); if (prev) lines = ['--- previous visit ---'].concat(prev.split('\n')).slice(-8); } catch (e) {}
+  ['visibilitychange', 'pagehide', 'pageshow', 'blur', 'focus'].forEach(function (ty) { window.addEventListener(ty, function () { log((ty === 'visibilitychange' ? 'visibility ' + document.visibilityState : ty) + (ty === 'pagehide' || (ty === 'visibilitychange' && document.visibilityState === 'hidden') ? '  <-- LEFT the page' : '')); }); });
+
+  var target = 'https://stillwater.skapi.com/';
+  var bare = target.replace(/^https?:\/\//, '');
+  var isAndroid = /Android/i.test(UA), isIOS = /iPhone|iPad|iPod/.test(UA);
+  var intentChrome = 'intent://' + bare + '#Intent;scheme=https;package=com.android.chrome;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;S.browser_fallback_url=' + encodeURIComponent(target) + ';end';
+  var intentAny = 'intent://' + bare + '#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end';
+  var chromeNav = 'googlechrome://navigate?url=' + target;
+  var methods = isIOS ? [
+    { label: 'Link: x-safari-https://', href: 'x-safari-https://' + bare },
+    { label: 'JS: location = x-safari-https://', js: function () { location.href = 'x-safari-https://' + bare; } },
+    { label: 'Link: googlechromes:// (Chrome app)', href: 'googlechromes://' + bare },
+    { label: 'Link: target=_blank https', href: target, blank: true },
+    { label: 'JS: window.open(https)', js: function () { window.open(target, '_blank'); } }
+  ] : [
+    { label: 'Link: intent:// (Chrome)', href: intentChrome, hot: true },
+    { label: 'JS click: location = intent:// (Chrome)', js: function () { location.href = intentChrome; } },
+    { label: 'Link: intent:// (any browser)', href: intentAny },
+    { label: 'Link: googlechrome://navigate', href: chromeNav },
+    { label: 'JS click: location = googlechrome://navigate', js: function () { location.href = chromeNav; } },
+    { label: 'Link: target=_blank https', href: target, blank: true },
+    { label: 'JS: window.open(https, _blank)', js: function () { window.open(target, '_blank'); } },
+    { label: 'JS: window.open(intent://)', js: function () { window.open(intentChrome, '_blank'); } },
+    { label: 'Link: microsoft-edge:https', href: 'microsoft-edge:' + target },
+    { label: 'Link: samsunginternet://open?url', href: 'samsunginternet://open?url=' + encodeURIComponent(target) },
+    { label: 'Link: plain https (same tab)', href: target },
+    { label: 'JS: intent 6 s after the tap (gesture expired)', js: function () { log('waiting 6 s'); setTimeout(function () { log('go'); location.href = intentChrome; }, 6000); } },
+    { label: 'JS: intent in a hidden iframe', js: function () { var f = document.createElement('iframe'); f.style.display = 'none'; f.src = intentChrome; document.body.appendChild(f); } }
+  ];
+  var list = document.getElementById('list');
+  methods.forEach(function (m, i) {
+    var row = document.createElement('div'); row.className = 'm';
+    var n = document.createElement('b'); n.textContent = i + 1; row.appendChild(n);
+    var el;
+    if (m.href) { el = document.createElement('a'); el.href = m.href; if (m.blank) { el.target = '_blank'; el.rel = 'noopener'; } el.addEventListener('click', function () { log('#' + (i + 1) + ' link click -> ' + m.href.slice(0, 48)); }); }
+    else { el = document.createElement('button'); el.type = 'button'; el.addEventListener('click', function () { log('#' + (i + 1) + ' js -> run'); try { m.js(); } catch (e) { log('#' + (i + 1) + ' threw ' + e.message); } }); }
+    el.textContent = (i + 1) + '. ' + m.label; if (m.hot) el.className = 'hot';
+    row.appendChild(el); list.appendChild(row);
+  });
+  log('ready (' + (isAndroid ? 'Android' : isIOS ? 'iOS' : 'other') + ')');
+</script>
+</body>
+</html>

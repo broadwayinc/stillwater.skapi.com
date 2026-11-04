@@ -1,0 +1,2383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stillwater Lake</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A quiet 3D lake you can walk around, cast a line, light a campfire and grill your catch with whoever is there. No account, no download, works on your phone.">
+<meta name="theme-color" content="#0e2f3a">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Stillwater Lake">
+<meta property="og:title" content="Stillwater Lake">
+<meta property="og:description" content="A quiet 3D lake to walk, fish and sit by the fire with whoever is there. No account, works on your phone.">
+<meta property="og:url" content="https://stillwater.skapi.com/">
+<meta property="og:image" content="https://stillwater.skapi.com/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="An angler on a wooden dock at sunset, line out over a calm lake ringed by pines.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Stillwater Lake">
+<meta name="twitter:description" content="A quiet 3D lake to walk, fish and sit by the fire with whoever is there. No account, works on your phone.">
+<meta name="twitter:image" content="https://stillwater.skapi.com/og.jpg">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap">
+<style>
+  /* Layout: a full-bleed WebGL lake with a thin glass HUD pinned to the screen edges.
+     Palette comes from a lake at golden hour: dusk water, amber sun, pine, driftwood. */
+  :root {
+    --water: #0e2f3a;
+    --ink: #0b1a20;
+    --fog: #f3dcb6;
+    --sun: #f2b35a;
+    --pine: #35563c;
+    --drift: #c9b89a;
+    --paper: #fbf5ea;
+    --glass: rgba(11, 26, 32, 0.62);
+    --glass-edge: rgba(251, 245, 234, 0.14);
+    --rare: #6fc3df;
+    --epic: #c58ff0;
+    --legend: #f2b35a;
+    --font-display: "Young Serif", Georgia, "Times New Roman", serif;
+    --font-body: "Atkinson Hyperlegible", "Helvetica Neue", Arial, sans-serif;
+    color-scheme: dark;
+  }
+  /* The document is deliberately twice the viewport tall and kept scrolled to its middle (see pinScroll).
+     Everything visible is position: fixed, so nothing moves; but in-app browsers (Threads, Instagram...) decide
+     whether a downward drag is "pull to refresh" or "drag the browser closed" by asking whether the page can
+     still scroll up. A page sitting at its top edge says no, and the browser reloads it or slides away mid-swipe. */
+  html { height: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; touch-action: manipulation; scrollbar-width: none; }
+  html::-webkit-scrollbar { display: none; }
+  body {
+    margin: 0; min-height: 200%;
+    background: var(--water);
+    color: var(--paper);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.4;
+    overflow: visible;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.entered { touch-action: none; } /* in the game nothing on the page scrolls, so no touch can ever move the document */
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .hud, .hud button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  #scene.dragging { cursor: grabbing; }
+
+  /* ---------- HUD ---------- */
+  .hud { position: fixed; inset: 0; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  .glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 12px;
+  }
+  #brand {
+    position: fixed;
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    left: max(16px, env(safe-area-inset-left, 0px));
+    padding: 10px 14px 11px;
+    display: flex; flex-direction: column; gap: 2px;
+    max-width: min(280px, calc(100vw - 32px));
+  }
+  #brand h1 { font-family: var(--font-display); font-weight: 400; font-size: 20px; margin: 0; letter-spacing: 0.005em; line-height: 1.15; }
+  #brand .sub { font-size: 12px; color: var(--drift); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a9aa0; display: inline-block; flex: none; }
+  .dot.live { background: #7fd68a; box-shadow: 0 0 10px rgba(127, 214, 138, 0.7); }
+  .dot.solo { background: var(--sun); }
+  .dot.wait { background: #8a9aa0; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+
+  #who {
+    position: fixed;
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 6px 6px 13px; box-sizing: border-box;
+    font: inherit; color: var(--paper); text-align: left; cursor: pointer;
+  }
+  /* the name box is as tall as the title card; the two round buttons share one size, set from that height (layoutHud) */
+  #who .who-name { font-size: 14px; font-weight: 700; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #custbtn { width: var(--hb, 34px); height: var(--hb, 34px); box-sizing: border-box; border-radius: 50%; border: 1px solid var(--glass-edge); background: rgba(255,255,255,0.06); color: var(--paper); display: flex; align-items: center; justify-content: center; flex: none; }
+  #custbtn svg { width: 55%; height: 55%; }
+  #who[aria-expanded="true"] #custbtn { background: var(--sun); color: var(--ink); }
+  #cust { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(var(--hud2, 66px) + env(safe-area-inset-top, 0px)); width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 12px 14px 6px; z-index: 4; --sw: 26px; } /* exactly as wide as four swatches a row */
+  #cust[hidden] { display: none; }
+  body.cust #tally, body.cust #bagbtn { display: none !important; } /* the panel takes the inventory corner while it is open */
+  .cust-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .cust-head button { background: transparent; border: 0; color: var(--paper); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  #cname-form { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  #cname-form label { font-size: 12px; color: var(--drift); width: 44px; flex: none; }
+  #cname { flex: none; width: calc(var(--sw) * 4 + 30px); box-sizing: border-box; min-width: 0; font: inherit; font-size: 16px; color: var(--paper); background: rgba(255,255,255,0.06); border: 1px solid var(--glass-edge); border-radius: 8px; padding: 7px 9px; outline: none; }
+  #cname:focus { border-color: var(--sun); }
+  .cust-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .cust-row > span { font-size: 12px; color: var(--drift); width: 44px; flex: none; padding-top: 6px; }
+  .sw { display: grid; grid-template-columns: repeat(4, var(--sw)); gap: 8px 10px; } /* eight colours each, as two even rows of four */
+  .swb { width: var(--sw); height: var(--sw); border-radius: 50%; border: 2px solid rgba(255,255,255,0.35); cursor: pointer; padding: 0; flex: none; }
+  .swb.on { border-color: var(--paper); box-shadow: 0 0 0 2px var(--sun); }
+
+  #prompt {
+    position: fixed;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(26px + env(safe-area-inset-bottom, 0px));
+    padding: 10px 16px;
+    font-size: 15px;
+    text-align: center;
+    white-space: nowrap;
+    max-width: calc(100vw - 32px);
+    overflow: hidden; text-overflow: ellipsis;
+    transition: opacity .25s;
+  }
+  #prompt.hidden { opacity: 0; }
+  #prompt kbd {
+    font: inherit; font-size: 12px; font-weight: 700;
+    background: var(--paper); color: var(--ink);
+    border-radius: 5px; padding: 1px 6px; margin: 0 2px;
+  }
+  #prompt.bite { background: rgba(242, 179, 90, 0.92); color: var(--ink); border-color: transparent; animation: shake .35s ease-in-out infinite; }
+  @keyframes shake { 0%,100% { transform: translateX(-50%) rotate(0); } 25% { transform: translateX(-52%) rotate(-1.2deg); } 75% { transform: translateX(-48%) rotate(1.2deg); } }
+  @keyframes shakeL { 0%,100% { transform: rotate(0); } 25% { transform: translateX(-2%) rotate(-1.2deg); } 75% { transform: translateX(2%) rotate(1.2deg); } }
+  body.touch #prompt.bite { animation-name: shakeL; }
+
+  #log {
+    position: fixed;
+    left: max(16px, env(safe-area-inset-left, 0px));
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    width: min(300px, calc(100vw - 32px));
+    padding: 8px 12px;
+    font-size: 13px;
+    display: flex; flex-direction: column; gap: 3px;
+    max-height: 34vh; overflow: hidden;
+    mask-image: linear-gradient(to bottom, transparent, #000 22%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22%);
+  }
+  #log .line { color: var(--paper); overflow-wrap: anywhere; }
+  #log .line .n { color: var(--sun); font-weight: 700; }
+  #log .line.sys { color: var(--drift); font-style: italic; }
+  #log .line.catch .n { color: #7fd68a; }
+
+  #tally {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    top: calc(var(--hud2, 66px) + env(safe-area-inset-top, 0px));
+    padding: 8px 12px;
+    font-size: 12px; color: var(--drift);
+    display: grid; grid-template-columns: auto auto; gap: 2px 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  #tally b { color: var(--paper); font-weight: 700; text-align: right; }
+  #tally .sep { grid-column: 1 / -1; height: 1px; background: var(--glass-edge); margin: 3px 0; }
+
+  #acts {
+    position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  }
+  #acts .act {
+    font: 700 14px var(--font-body); color: var(--ink); background: var(--paper);
+    border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.3);
+    display: flex; align-items: center; gap: 8px; max-width: 70vw;
+  }
+  #acts .act kbd { font: 700 11px var(--font-body); background: var(--ink); color: var(--paper); border-radius: 4px; padding: 1px 6px; }
+  #acts .act:focus-visible { outline: 2px solid var(--sun); outline-offset: 2px; }
+
+  /* catch card */
+  #card {
+    position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(.9);
+    padding: 18px 26px; text-align: center; opacity: 0; pointer-events: none;
+    transition: opacity .3s, transform .3s cubic-bezier(.2,1.4,.4,1);
+    min-width: 220px; max-width: calc(100vw - 48px);
+  }
+  #card.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #card .eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--drift); }
+  #card .fish { font-family: var(--font-display); font-size: 26px; margin: 4px 0 2px; text-wrap: balance; }
+  #card .wt { font-size: 15px; color: var(--paper); font-variant-numeric: tabular-nums; }
+  #card.r-uncommon .fish { color: #9ad9a3; }
+  #card.r-rare .fish { color: var(--rare); }
+  #card.r-epic .fish { color: var(--epic); }
+  #card.r-legendary .fish { color: var(--legend); text-shadow: 0 0 18px rgba(242,179,90,.6); }
+
+  /* touch controls */
+  #log, #prompt, #card { pointer-events: none !important; }
+  body:not(.entered) #log, body:not(.entered) #tally, body:not(.entered) #prompt, body:not(.entered) #acts { display: none; }
+  #castbtn {
+    position: fixed; right: max(18px, env(safe-area-inset-right, 0px)); bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+    width: 72px; height: 72px; border-radius: 50%; border: 2px solid var(--glass-edge);
+    background: rgba(242,179,90,.92); color: var(--ink); font: 700 15px var(--font-body);
+    display: none; align-items: center; justify-content: center; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  #kindbtn {
+    position: fixed; right: max(28px, env(safe-area-inset-right, 0px)); bottom: calc(162px + env(safe-area-inset-bottom, 0px));
+    width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--glass-edge);
+    background: var(--glass); color: var(--paper); font: 700 12px var(--font-body); line-height: 1.1; display: none; align-items: center; justify-content: center; text-align: center;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  body.touch.entered #castbtn, body.touch.entered #kindbtn { display: flex; }
+  body.touch #acts { bottom: calc(226px + env(safe-area-inset-bottom, 0px)); }
+  body.touch #acts .act { padding: 11px 15px; font-size: 15px; }
+  body.touch #brand { padding: 9px 13px; }
+  body.touch #brand h1 { font-size: 17px; }
+  body.touch #brand .sub { font-size: 12px; }
+  body.touch #who .who-name { max-width: 110px; }
+  body.touch #cust { --sw: 30px; }
+  body.touch #tally { display: none; font-size: 13px; padding: 9px 12px; gap: 2px 12px; top: calc(var(--hud3, 118px) + env(safe-area-inset-top, 0px)); }
+  body.touch #tally.open { display: grid; }
+  /* photos: a round camera button under the title card, mirroring the bag button on the right */
+  #photobtn {
+    position: fixed; left: calc(max(16px, env(safe-area-inset-left, 0px)) + 6px); top: calc(var(--hud2, 66px) + env(safe-area-inset-top, 0px));
+    width: var(--hb, 44px); height: var(--hb, 44px); border-radius: 50%; border: 1px solid var(--glass-edge); background: var(--glass); color: var(--paper); padding: 0;
+    display: none; align-items: center; justify-content: center; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  #photobtn svg { width: 55%; height: 55%; }
+  body.entered #photobtn { display: flex; }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 6; transition: opacity .4s; }
+  #flash.on { opacity: .8; transition: none; }
+  #photo, #leave { position: fixed; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center; background: rgba(11,26,32,.55); padding: 16px; box-sizing: border-box; }
+  #photo[hidden], #leave[hidden] { display: none; }
+  #photo .sheet, #leave .sheet { padding: 12px; width: min(520px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; }
+  #photo img { display: block; max-width: 100%; max-height: 62vh; width: auto; height: auto; margin: 0 auto; border-radius: 8px; }
+  #photo .row2, #leave .row2 { display: flex; gap: 8px; }
+  #photo .row2 button, #leave .row2 button { flex: 1; font: 700 15px var(--font-body); border-radius: 10px; padding: 11px 12px; border: 0; cursor: pointer; background: var(--sun); color: var(--ink); }
+  #photo .row2 button.ghost, #leave .row2 button.ghost { background: transparent; color: var(--paper); border: 1px solid var(--glass-edge); }
+  #photo .row2 button[hidden] { display: none; }
+  #photo-share[hidden] + #photo-save { background: var(--sun); color: var(--ink); border: 0; } /* without a share sheet, Save is the main action */
+  #leave .sheet { width: min(400px, 100%); padding: 18px 18px 12px; }
+  #leave .sheet p { margin: 0; color: var(--paper); font-size: 15px; }
+  #leave .later { background: transparent; border: 0; color: var(--drift); font: 400 13px var(--font-body); text-decoration: underline; cursor: pointer; padding: 6px 0; }
+  #photo .hint, #leave .hint { margin: 0; font-size: 12px; color: var(--drift); text-align: center; }
+  #bagbtn {
+    /* sits under the shirt button, same size, with a clear gap below the name box */
+    position: fixed; right: calc(max(16px, env(safe-area-inset-right, 0px)) + 6px); top: calc(var(--hud2, 66px) + env(safe-area-inset-top, 0px));
+    width: var(--hb, 44px); height: var(--hb, 44px); border-radius: 50%; border: 1px solid var(--glass-edge); background: var(--glass); color: var(--paper);
+    display: none; align-items: center; justify-content: center; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  #bagbtn svg { width: 55%; height: 55%; }
+  #bagbtn .n { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--sun); color: var(--ink); font: 700 11px var(--font-body); display: none; align-items: center; justify-content: center; padding: 0 4px; }
+  #bagbtn .n.show { display: flex; }
+  body.touch.entered #bagbtn { display: flex; }
+  body.touch #log { font-size: 12px; width: min(260px, calc(100vw - 130px)); max-height: 15vh; line-height: 1.3; }
+  body.touch #card .fish { font-size: 30px; }
+  .keys-touch { display: none; }
+  body.touch .keys-desktop { display: none; }
+  body.touch .keys-touch { display: grid; }
+  body.touch #prompt { font-size: 14px; padding: 9px 14px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); left: 16px; right: auto; transform: none; max-width: calc(100vw - 120px); }
+  body.touch #log { bottom: calc(66px + env(safe-area-inset-bottom, 0px)); padding: 6px 10px; }
+
+  /* welcome */
+  #welcome {
+    position: fixed; inset: 0; display: flex; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; box-sizing: border-box;
+    background: radial-gradient(ellipse at 50% 60%, rgba(11,26,32,.25), rgba(11,26,32,.72));
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 16px;
+    transition: opacity .5s; z-index: 5;
+  }
+  #welcome { visibility: hidden; } body.ready #welcome { visibility: visible; } /* nothing flashes before the script has decided what to show */
+  #welcome.gone { opacity: 0; pointer-events: none; }
+  /* in an in-app browser the welcome card first shows only the open-in-browser notice; "Continue here" swaps it for the card */
+  body.in-app-browser .wcard.gate > :not(.inapp) { display: none; }
+  body.in-app-browser .wcard.gate { background: transparent; border: 0; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.in-app-browser .wcard.gate .inapp { margin-bottom: 0; background: var(--glass); border: 1px solid var(--glass-edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 14px; padding: 22px 22px 16px; }
+  body.in-app-browser .wcard.gate .inapp p { font-size: 15px; }
+  .inapp .cont { margin-top: 26px; background: transparent; border: 0; color: var(--drift); font: 400 13px var(--font-body); text-decoration: underline; cursor: pointer; padding: 6px 0; }
+  .wcard { padding: 28px 30px 24px; max-width: 420px; width: 100%; box-sizing: border-box; margin: auto; flex: none; }
+  .wcard .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--sun); }
+  .wcard h2 { font-family: var(--font-display); font-weight: 400; font-size: 34px; margin: 6px 0 10px; line-height: 1.05; text-wrap: balance; }
+  .wcard p { margin: 0 0 16px; color: var(--drift); max-width: 36ch; }
+  .wcard .wnote { color: var(--paper); background: rgba(242,179,90,.14); border: 1px solid rgba(242,179,90,.5); border-radius: 10px; padding: 10px 12px; max-width: none; }
+  .wcard .wnote[hidden] { display: none; }
+  .wcard .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .wcard .row input { flex: 1; min-width: 140px; font: inherit; font-size: 16px; color: var(--paper); background: rgba(255,255,255,.07); border: 1px solid var(--glass-edge); border-radius: 10px; padding: 10px 12px; outline: none; }
+  .wcard .row input:focus { border-color: var(--sun); }
+  .wcard .keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; color: var(--drift); margin-bottom: 20px; }
+  .wcard .keys kbd { font: 700 12px var(--font-body); background: rgba(251,245,234,.12); border: 1px solid var(--glass-edge); border-radius: 5px; padding: 1px 6px; color: var(--paper); }
+  .wcard button, #castbtn, #kindbtn { cursor: pointer; }
+  .wcard button {
+    width: 100%; font: 700 16px var(--font-body); color: var(--ink); background: var(--sun);
+    border: 0; border-radius: 10px; padding: 13px 16px;
+  }
+  .wcard button:focus-visible, #cname:focus-visible, .swb:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+  .inapp { display: none; border: 1px solid rgba(242,179,90,.55); background: rgba(242,179,90,.12); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+  .inapp.show { display: block; }
+  .inapp p { margin: 0 0 10px; color: var(--paper); font-size: 14px; max-width: none; }
+  .inapp .row2 { display: flex; gap: 8px; flex-wrap: wrap; }
+  .inapp .row2 a, .inapp .row2 button { flex: 1; min-width: 120px; font: 700 14px var(--font-body); text-align: center; text-decoration: none; color: var(--ink); background: var(--sun); border: 0; border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+  .inapp .row2 button.ghost { background: transparent; color: var(--paper); border: 1px solid var(--glass-edge); }
+  .inapp .steps { font-size: 12px; color: var(--drift); margin: 8px 0 0; }
+
+  @media (max-width: 600px) {
+    #brand h1 { font-size: 17px; }
+    #who { padding-left: 11px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #prompt.bite { animation: none; }
+    .dot.wait { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene" aria-label="Stillwater Lake, a 3D fishing lake you can walk around"></canvas>
+
+<div class="hud">
+  <div id="brand" class="glass">
+    <h1>Stillwater Lake</h1>
+    <div class="sub"><span id="netdot" class="dot wait"></span><span id="netlabel">Connecting</span><span id="count"></span></div>
+  </div>
+
+  <button id="who" class="glass" type="button" title="Customize your angler" aria-expanded="false" aria-controls="cust">
+    <span id="who-name" class="who-name">Angler</span>
+    <span id="custbtn" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 3.5 4 6.5l1.8 3.6L8 9.2V20h8V9.2l2.2.9L20 6.5l-4.5-3a3.5 3.5 0 0 1-7 0z"/></svg></span>
+  </button>
+  <div id="cust" class="glass" hidden>
+    <div class="cust-head"><b>Your angler</b><button id="cust-close" type="button" aria-label="Close">&times;</button></div>
+    <form id="cname-form"><label for="cname">Name</label><input id="cname" maxlength="18" autocomplete="off" spellcheck="false" enterkeyhint="done"></form>
+    <div class="cust-row"><span>Shirt</span><div class="sw" id="sw-shirt"></div></div>
+    <div class="cust-row"><span>Pants</span><div class="sw" id="sw-pants"></div></div>
+    <div class="cust-row"><span>Cap</span><div class="sw" id="sw-cap"></div></div>
+    <div class="cust-row"><span>Shoes</span><div class="sw" id="sw-shoe"></div></div>
+  </div>
+
+  <div id="tally" class="glass">
+    <span>Caught</span><b id="t-count">0</b>
+    <span>Heaviest</span><b id="t-best">none yet</b>
+    <span class="sep"></span>
+    <span>Fish to cook</span><b id="t-fish">0</b>
+    <span>Branches</span><b id="t-wood">0</b>
+    <span>Stones</span><b id="t-rock">0</b>
+  </div>
+
+  <button id="bagbtn" type="button" aria-label="Catch and inventory" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h16l-1.2 10.2a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8L4 9z"/><path d="M8 9V7a4 4 0 0 1 8 0v2"/></svg>
+    <span class="n" id="bag-n"></span>
+  </button>
+  <div id="log" class="glass" aria-live="polite"></div>
+
+  <div id="prompt" class="glass hidden"></div>
+
+  <div id="acts"></div>
+
+  <div id="card" class="glass" role="status">
+    <div class="eyebrow" id="card-eyebrow">You caught</div>
+    <div class="fish" id="card-fish"></div>
+    <div class="wt" id="card-wt"></div>
+  </div>
+
+  <button id="castbtn" type="button">Cast</button>
+  <button id="kindbtn" type="button" aria-label="Say something kind">Kind<br>word</button>
+  <button id="photobtn" type="button" aria-label="Take a photo" title="Take a photo (P)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
+  </button>
+</div>
+<div id="flash"></div>
+<div id="photo" hidden>
+  <div class="sheet glass" role="dialog" aria-label="Your photo">
+    <img id="photo-img" alt="Your photo from Stillwater Lake">
+    <div class="row2"><button id="photo-share" type="button">Share</button><button id="photo-save" type="button" class="ghost">Save</button><button id="photo-close" type="button" class="ghost">Close</button></div>
+    <p class="hint" id="photo-hint"></p>
+  </div>
+</div>
+<div id="leave" hidden>
+  <div class="sheet glass" role="dialog" aria-label="Open in your browser">
+    <p>Photos cannot be saved or shared inside <span id="leave-name">this app's</span> browser. Open the lake in your normal browser to take photos.</p>
+    <div class="row2"><button id="leave-open" type="button">Open in browser</button><button id="leave-copy" class="ghost" type="button">Copy link</button></div>
+    <p class="hint" id="leave-steps"></p>
+    <button id="leave-close" class="later" type="button">Not now</button>
+  </div>
+</div>
+
+<div id="welcome">
+  <div class="wcard glass">
+    <div class="eyebrow">Open to everyone, no account</div>
+    <h2>Evening at Stillwater Lake</h2>
+    <p id="wnote" class="wnote" hidden>You were away for a while, so your spot at the lake was let go. Walk back in to rejoin everyone.</p>
+    <p>Walk down to the water, cast a line, gather branches and stones for a campfire, and grill what you catch while it burns. Anyone at the lake can sit down and eat from your grill, and every fish eaten earns an appreciation dance to share whenever you like. The light follows your own clock, and the land loops: walk over the ridge in any direction and you come back down to this same lake.</p>
+    <div id="inapp" class="inapp">
+      <p>You are inside the <span id="inapp-name">app's</span> built-in browser. The lake works better in your normal browser.</p>
+      <div class="row2"><a id="inapp-open" href="https://stillwater.skapi.com/" target="_blank" rel="noopener">Open in browser</a><button id="inapp-copy" class="ghost" type="button">Copy link</button></div>
+      <p class="steps" id="inapp-steps">Or tap the &middot;&middot;&middot; menu in the corner and choose "Open in browser".</p>
+      <button id="inapp-cont" class="cont" type="button">Continue here anyway</button>
+    </div>
+    <form id="wname-form" class="row"><input id="wname" maxlength="18" placeholder="Your name" autocomplete="off" spellcheck="false" enterkeyhint="go"></form>
+    <div class="keys keys-desktop">
+      <span><kbd>W</kbd><kbd>S</kbd></span><span>walk forward and back, hold <kbd>Shift</kbd> to run</span>
+      <span><kbd>A</kbd><kbd>D</kbd></span><span>turn left and right (arrows work too)</span>
+      <span>Drag</span><span>peek around; the view swings back when you let go</span>
+      <span>Click</span><span>walk to that spot</span>
+      <span><kbd>Space</kbd></span><span>cast near water, then reel when it bites</span>
+      <span><kbd>E</kbd><kbd>B</kbd><kbd>G</kbd></span><span>pick up or eat, build a campfire, grill a fish</span>
+      <span><kbd>T</kbd></span><span>appreciation dance, one for every grilled fish you ate</span>
+      <span><kbd>Enter</kbd></span><span>say something kind to the lake</span>
+      <span><kbd>P</kbd></span><span>take a photo to save or share</span>
+    </div>
+    <div class="keys keys-touch">
+      <span>Swipe</span><span>turn and look around</span>
+      <span>Tap ground</span><span>walk to that spot</span>
+      <span>Pinch</span><span>zoom</span>
+      <span><kbd>Cast</kbd></span><span>cast near water, tap again when it bites</span>
+      <span><kbd>Kind word</kbd></span><span>say something kind to the lake</span>
+      <span>Camera</span><span>take a photo to save or share</span>
+      <span>Buttons</span><span>appear when there is something to pick up, cook or eat</span>
+    </div>
+    <button id="enter" type="button">Walk to the lake</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.152.2/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/skapi-js@2.2.25/dist/skapi.js"></script>
+<script>
+(function () {
+  'use strict';
+  const SKAPI_PROJECT_ID = '5Aj23WAASla3eFEcZq-7Zd6TgdLUaFxseKMT1qveY';
+  const GROUP = 'stillwater-lake';
+
+  // ---------------------------------------------------------------- helpers
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const TAU = Math.PI * 2;
+  function angleLerp(a, b, t) { let d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI; return a + d * t; }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+  function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  const CTRL_RE = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e]', 'g');
+  function cleanText(s, max) { return String(s || '').replace(CTRL_RE, '').trim().slice(0, max); }
+  function cleanName(s) { return cleanText(s, 18); }
+  function strHash(s) { let h = 2166136261; s = String(s); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) % 100000; }
+  // in-app browsers (Threads, Instagram and the like) do not always answer the pointer media query, so check several signals
+  const isTouch = matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+  if (isTouch) document.body.classList.add('touch');
+  // In-app browsers (Threads, Instagram, Facebook, X, LINE, KakaoTalk...) run the page inside a sheet whose own drag
+  // gestures compete with the lake's swipes, so on arrival they get a notice with a way out; nothing opens by itself.
+  const UA = navigator.userAgent || '';
+  const inAppName = /Barcelona/i.test(UA) ? 'Threads' : /Instagram/i.test(UA) ? 'Instagram' : /FBAN|FBAV|FB_IAB/i.test(UA) ? 'Facebook' : /Twitter|X11; Linux; .*TwitterAndroid/i.test(UA) ? 'X' : /\bLine\//i.test(UA) ? 'LINE' : /KAKAOTALK/i.test(UA) ? 'KakaoTalk' : /; wv\)/.test(UA) ? 'app\'s' : (/iPhone|iPad/.test(UA) && !/Safari\//.test(UA) && !/CriOS|FxiOS|EdgiOS/.test(UA)) ? 'app\'s' : null;
+  const inApp = !!inAppName;
+  (function inAppSetup() {
+    if (!inApp) return;
+    const here = location.href.split('#')[0];
+    const isAndroid = /Android/i.test(UA);
+    const isIOS = /iPhone|iPad|iPod/.test(UA);
+    const bare = here.replace(/^https?:\/\//, '');
+    // Android: an intent link asks the system to open the page in Chrome, falling back to the plain address if Chrome is absent.
+    // iOS: the x-safari-https scheme hands the address to Safari (iOS 17+); older systems ignore it and the menu hint remains.
+    const openHref = isAndroid ? 'intent://' + bare + '#Intent;scheme=https;package=com.android.chrome;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent(here) + ';end'
+      : isIOS ? 'x-safari-https://' + bare : here;
+    const nm = document.getElementById('inapp-name'); if (nm) nm.textContent = inAppName === 'app\'s' ? 'app\'s' : inAppName;
+    const steps = document.getElementById('inapp-steps');
+    if (steps) steps.innerHTML = isAndroid ? 'Or tap the &middot;&middot;&middot; at the top right and choose "Open in Chrome" (or "Open in browser").' : 'Or tap the &middot;&middot;&middot; menu and choose "Open in browser" (or "Open in Safari").';
+    const notice = document.getElementById('inapp');
+    notice.classList.add('show');
+    document.body.classList.add('in-app-browser');
+    const card = document.querySelector('.wcard'); card.classList.add('gate');
+    // "Continue here anyway": the notice goes away for good and the ordinary welcome card takes its place
+    tapify(document.getElementById('inapp-cont'), () => { card.classList.remove('gate'); notice.classList.remove('show'); });
+    const copyLink = (btn) => {
+      const done = () => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy link'; }, 1800); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(here).then(done, () => { window.prompt('Copy this link', here); });
+      else window.prompt('Copy this link', here);
+    };
+    tapify(document.getElementById('inapp-copy'), () => copyLink(document.getElementById('inapp-copy')));
+    const stillHere = () => { if (steps) setTimeout(() => { if (document.visibilityState !== 'visible') return; steps.style.color = 'var(--sun)'; steps.style.fontWeight = '700'; }, 1500); }; // still here? make the manual route stand out
+    // The hand-off that Threads honours (its own "leave the app?" confirmation, then Chrome) is a script navigation
+    // made right after a page load; the same navigation made from a tap, or a plain link, is ignored. So the button
+    // reloads the page with #open and the freshly loaded page makes the navigation. Nothing happens on plain arrival.
+    const a = document.getElementById('inapp-open');
+    a.href = openHref; a.removeAttribute('target');
+    a.addEventListener('click', (e) => e.preventDefault()); // never the link's own navigation
+    const openOutside = () => { try { history.replaceState(null, '', here + '#open'); } catch (err) { /* ignored */ } location.reload(); };
+    tapify(a, openOutside);
+    // the same way out, offered again from inside the lake when the camera is tapped: an in-app browser can neither
+    // download a photo nor hand it to the share sheet, so photos are taken in the real browser instead
+    const ln = document.getElementById('leave-name'); if (ln) ln.textContent = inAppName === 'app\'s' ? 'this app\'s' : inAppName + (/s$/.test(inAppName) ? '\'' : '\'s'); // Threads', Instagram's
+    document.getElementById('leave-steps').innerHTML = steps.innerHTML;
+    tapify(document.getElementById('leave-open'), openOutside);
+    tapify(document.getElementById('leave-copy'), () => copyLink(document.getElementById('leave-copy')));
+    try {
+      if (location.hash === '#open') {
+        history.replaceState(null, '', here);
+        const autoHref = isAndroid ? openHref.replace(encodeURIComponent(here), encodeURIComponent(here + '#noauto')) : openHref;
+        if (isAndroid || isIOS) setTimeout(() => { stillHere(); try { location.href = autoHref; } catch (err) { /* ignored */ } }, 250);
+      }
+    } catch (err) { /* ignored */ }
+  })();
+  document.body.classList.add('ready'); // the welcome card (or the in-app notice) appears only now that it is decided which one
+  // Touch diagnostics: open the page with #diag to see, on screen, every input event the page receives
+  // (type, target, timing), the frame time, and the browser identity. Reading only, it changes nothing else.
+  (function diag() {
+    if (!/\bdiag\b/.test(location.hash + location.search)) return;
+    const box = document.createElement('pre');
+    box.id = 'diag';
+    box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99;margin:0;padding:6px 8px;max-height:46vh;overflow:hidden;background:rgba(0,0,0,.72);color:#9f9;font:11px/1.35 ui-monospace,Menlo,monospace;pointer-events:none;white-space:pre-wrap;word-break:break-all';
+    document.body.appendChild(box);
+    const lines = [];
+    let t0 = performance.now(), fcount = 0, fms = 0, worst = 0, last = performance.now();
+    const head = () => 'UA: ' + UA.slice(0, 110) + '\nin-app: ' + (inAppName || 'no') + '  touch: ' + isTouch + '  dpr: ' + (devicePixelRatio || 1) + '  view: ' + innerWidth + 'x' + innerHeight + '  vv: ' + (visualViewport ? Math.round(visualViewport.width) + 'x' + Math.round(visualViewport.height) + ' @' + Math.round(visualViewport.offsetTop) : '-') + '\nframe: ' + fms.toFixed(0) + ' ms avg, worst ' + worst.toFixed(0) + ' ms\n';
+    const draw = () => { box.textContent = head() + lines.join('\n'); };
+    const log = (s) => { lines.push(((performance.now() - t0) / 1000).toFixed(2) + ' ' + s); if (lines.length > 14) lines.shift(); draw(); };
+    const name = (el) => !el || el === document ? 'document' : el === window ? 'window' : (el.id ? '#' + el.id : el.tagName ? el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '') : String(el));
+    const pos = (e) => { const t = e.changedTouches ? e.changedTouches[0] : e; return t && t.clientX != null ? ' @' + Math.round(t.clientX) + ',' + Math.round(t.clientY) + ' on ' + name(document.elementFromPoint(t.clientX, t.clientY)) : ''; };
+    for (const ty of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend', 'touchcancel', 'mousedown', 'click', 'contextmenu'])
+      document.addEventListener(ty, (e) => log(ty + (e.pointerType ? '(' + e.pointerType + ')' : '') + ' ' + name(e.target) + pos(e) + (e.defaultPrevented ? ' prevented' : '') + (e.cancelable === false ? ' uncancelable' : '')), false); // bubble phase, so 'prevented' reflects the control's own handler
+    for (const ty of ['visibilitychange', 'pagehide', 'pageshow', 'blur', 'focus', 'resize', 'scroll'])
+      window.addEventListener(ty, () => log(ty + (ty === 'visibilitychange' ? ' ' + document.visibilityState : '')), true);
+    window.addEventListener('error', (e) => log('ERROR ' + (e.message || e.type)));
+    (function tick() { requestAnimationFrame(tick); const n = performance.now(); const d = n - last; last = n; fcount++; fms += (d - fms) / Math.min(fcount, 60); if (d > worst && fcount > 10) worst = d; if (fcount % 30 === 0) draw(); })();
+    log('diag on');
+  })();
+  // Keep the document parked in the middle of its scroll range (see the html/body rules), so the hosting app's
+  // pull-to-refresh and drag-to-close never see the page at its top edge. Re-parks after any drift, debounced.
+  let pinT = 0;
+  function pinScroll() {
+    const range = document.documentElement.scrollHeight - innerHeight;
+    if (range <= 0) return;
+    const mid = Math.round(range / 2);
+    if (Math.abs(scrollY - mid) > 2) scrollTo(0, mid);
+  }
+  const pinSoon = () => { clearTimeout(pinT); pinT = setTimeout(pinScroll, 150); };
+  addEventListener('scroll', pinSoon, { passive: true });
+  addEventListener('resize', pinSoon);
+  addEventListener('touchend', pinSoon, { passive: true });
+  addEventListener('touchcancel', pinSoon, { passive: true });
+  addEventListener('load', pinScroll);
+  pinScroll();
+  document.addEventListener('gesturestart', (e) => { if (entered) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', (e) => { if (entered && e.touches.length > 1 && e.target !== canvas) e.preventDefault(); }, { passive: false });
+  document.addEventListener('contextmenu', (e) => { if (e.target === canvas) e.preventDefault(); }); // no long-press menu over the lake
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // deterministic-looking noise for the terrain
+  function hash(x, z) { const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453; return s - Math.floor(s); }
+  function noise(x, z) {
+    const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
+    const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+    return lerp(lerp(hash(xi, zi), hash(xi + 1, zi), u), lerp(hash(xi, zi + 1), hash(xi + 1, zi + 1), u), v);
+  }
+  function fbm(x, z) { return noise(x, z) * 0.55 + noise(x * 2.1 + 7, z * 2.1 + 3) * 0.3 + noise(x * 4.3 + 11, z * 4.3 + 5) * 0.15; }
+
+  // ---------------------------------------------------------------- world constants
+  const LAKE_R = 24;        // basin radius
+  const TILE = 340;         // the world repeats every TILE units in x and z; walk off one side and you arrive from the other
+  const HALF = TILE / 2;
+  const WORLD_R = HALF;     // coordinate bound used for sanity checks
+  // periodic noise (sums of sines with whole wavenumbers), so the heightfield tiles exactly
+  function pn(x, z, sd) {
+    const k = TAU / TILE;
+    let v = Math.sin(x * k * 2 + sd) * Math.cos(z * k * 3 + sd * 1.3);
+    v += 0.6 * Math.sin(x * k * 5 + 1.7 + sd) * Math.sin(z * k * 2 + 0.4);
+    v += 0.5 * Math.cos(x * k * 7 + z * k * 4 + 2.1 * sd);
+    v += 0.35 * Math.sin(x * k * 11 - z * k * 9 + sd);
+    v += 0.25 * Math.cos(x * k * 13 + z * k * 17 + 0.5 * sd);
+    return clamp(v / 2.7 * 0.5 + 0.5, 0, 1);
+  }
+  function wrapCoord(v) { return v - Math.round(v / TILE) * TILE; }
+  const DOCK = { x: 0, z0: LAKE_R + 2.5, z1: LAKE_R - 11, w: 2.6, y: 0.62 };
+  const CAMP = { x: -7.5, z: LAKE_R + 7 };
+
+  function terrainH(x, z) {
+    const r = Math.hypot(x, z);
+    const basin = -0.6 - 3.0 * smooth(LAKE_R - 1, LAKE_R * 0.25, r);
+    const shore = lerp(-0.6, 0.35, clamp((r - (LAKE_R - 2)) / 5, 0, 1));
+    let h;
+    if (r < LAKE_R - 2) h = basin;
+    else if (r < LAKE_R + 3) h = shore;
+    else h = 0.35;
+    const rolling = pn(x, z, 0) * 6.0;
+    const far = Math.pow(smooth(70, 150, r), 1.6) * 22 + pn(x, z, 3) * smooth(80, 150, r) * 14;
+    h += rolling * smooth(LAKE_R + 2, LAKE_R + 16, r) + far;
+    return h;
+  }
+  function onDock(x, z) { return Math.abs(x - DOCK.x) < DOCK.w / 2 && z > DOCK.z1 && z < DOCK.z0 + 0.6; }
+  const SWIM_Y = -1.15;     // a swimmer floats with the head above the surface (the body's shoulders sit at this height above its feet)
+  // in the shallows you wade along the bottom; once the water is deeper than that you swim at the surface, never below it
+  function groundY(x, z) { return onDock(x, z) ? DOCK.y : Math.max(terrainH(x, z), SWIM_Y); }
+  function onWater(x, z) { return !onDock(x, z) && terrainH(x, z) < 0; }
+  function swimming(x, z) { return !onDock(x, z) && terrainH(x, z) < SWIM_Y; }
+  function nearWater(x, z) {
+    const r = Math.hypot(x, z);
+    return onDock(x, z) || r < LAKE_R + 5.5;
+  }
+
+  // ---------------------------------------------------------------- renderer / scene
+  const canvas = $('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  // in-app browsers get a fraction of a real tab's GPU time: render at 1x there, and never above 2x elsewhere
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, inApp ? 1 : 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.92;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const scene = new THREE.Scene();
+  const FOG_COLOR = new THREE.Color(0xf0cfa0);
+  scene.fog = new THREE.Fog(FOG_COLOR, 70, 330);
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 900);
+
+  function resize() {
+    const w = innerWidth, h = innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  addEventListener('resize', resize); resize();
+
+  // lights
+  const sunDir = new THREE.Vector3(0.55, 0.42, -0.72).normalize();
+  const sun = new THREE.DirectionalLight(0xffd3a1, 2.0);
+  sun.position.copy(sunDir).multiplyScalar(80);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.near = 10; sun.shadow.camera.far = 220;
+  sun.shadow.camera.left = -55; sun.shadow.camera.right = 55; sun.shadow.camera.top = 55; sun.shadow.camera.bottom = -55;
+  sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02;
+  scene.add(sun); scene.add(sun.target);
+  const hemi = new THREE.HemisphereLight(0xa9c4dc, 0x4f4530, 0.6);
+  scene.add(hemi);
+
+  // sky dome
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { sunDir: { value: sunDir }, glowK: { value: 1 }, top: { value: new THREE.Color(0x4f7fb0) }, mid: { value: new THREE.Color(0xb9cfe0) }, hor: { value: new THREE.Color(0xf5c38b) }, sunCol: { value: new THREE.Color(0xffe2b0) } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); gl_Position.z = gl_Position.w; }`,
+    fragmentShader: `varying vec3 vDir; uniform vec3 sunDir, top, mid, hor, sunCol; uniform float glowK;
+      void main(){
+        float y = clamp(vDir.y, -0.1, 1.0);
+        vec3 c = mix(hor, mid, smoothstep(0.0, 0.18, y));
+        c = mix(c, top, smoothstep(0.15, 0.7, y));
+        float s = max(dot(normalize(vDir), sunDir), 0.0);
+        c += sunCol * (pow(s, 600.0) * 1.6 + pow(s, 24.0) * 0.35 + pow(s, 4.0) * 0.12) * glowK;
+        gl_FragColor = vec4(c, 1.0);
+      }`
+  });
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(600, 32, 16), skyMat));
+  // stars, shown only when the sun is down
+  const stars = (function () {
+    const n = 1400, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const u = Math.random(), v = Math.random();
+      const th = u * TAU, ph = Math.acos(1 - v * 0.98); // upper hemisphere, thinning toward the horizon
+      arr[i * 3] = Math.sin(ph) * Math.cos(th) * 560; arr[i * 3 + 1] = Math.cos(ph) * 560 + 8; arr[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * 560;
+    }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xeef2ff, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false }));
+    pts.renderOrder = -1; scene.add(pts); return pts;
+  })();
+
+  // terrain
+  const terrainTiles = [];
+  (function buildTerrain() {
+    const size = 340, seg = 230;
+    const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const cGrass = new THREE.Color(0x4f7a38), cGrass2 = new THREE.Color(0x7d9444), cSand = new THREE.Color(0xd3bd8c), cMud = new THREE.Color(0x24423c), cRock = new THREE.Color(0x7d7a6c), cSnow = new THREE.Color(0xe8e2d4);
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      const h = terrainH(x, z);
+      pos.setY(i, h);
+      const r = Math.hypot(x, z);
+      const n = fbm(x * 0.15, z * 0.15);
+      c.copy(cGrass).lerp(cGrass2, n);
+      if (r < LAKE_R + 3.5) c.lerp(cSand, smooth(LAKE_R + 3.5, LAKE_R + 1, r));
+      if (r < LAKE_R - 1) c.lerp(cMud, smooth(LAKE_R - 1, LAKE_R - 6, r));
+      if (h > 9) c.lerp(cRock, smooth(9, 16, h));
+      if (h > 20) c.lerp(cSnow, smooth(20, 30, h));
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }));
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    // the eight neighbouring tiles share the same heightfield, so the horizon continues past every edge
+    terrainTiles.push(mesh);
+    for (const ox of [-1, 0, 1]) for (const oz of [-1, 0, 1]) {
+      if (!ox && !oz) continue;
+      const m = mesh.clone(); m.position.set(ox * TILE, 0, oz * TILE); scene.add(m); terrainTiles.push(m);
+    }
+    return mesh;
+  })();
+
+  // water
+  const waterUniforms = THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+    time: { value: 0 },
+    deep: { value: new THREE.Color(0x0b3340) },
+    shallow: { value: new THREE.Color(0x2f7f7c) },
+    sky: { value: new THREE.Color(0xa9c6d8) },
+    sunDir: { value: sunDir },
+    sunCol: { value: new THREE.Color(0xffd9a8) },
+    wLight: { value: 1 },
+    me: { value: new THREE.Vector3(0, 0, 0) }, // x, z and how deep under the player is (0..1): the water clears a little around them
+    ripples: { value: [new THREE.Vector4(0, 0, -9, 0), new THREE.Vector4(0, 0, -9, 0), new THREE.Vector4(0, 0, -9, 0), new THREE.Vector4(0, 0, -9, 0)] }
+  }]);
+  const waterMat = new THREE.ShaderMaterial({
+    uniforms: waterUniforms, transparent: true, fog: true,
+    vertexShader: `
+      #include <fog_pars_vertex>
+      uniform float time; varying vec3 vWorld; varying vec3 vNormalW;
+      float wave(vec2 p){ return sin(p.x*0.9 + time*1.1)*0.05 + sin(p.y*1.3 - time*0.9)*0.04 + sin((p.x+p.y)*0.5 + time*0.6)*0.06; }
+      void main(){
+        vec3 p = position;
+        vec4 w = modelMatrix * vec4(p,1.0);
+        float h = wave(w.xz);
+        w.y += h;
+        float e = 0.35;
+        float hx = wave(w.xz + vec2(e,0.0)) - h; float hz = wave(w.xz + vec2(0.0,e)) - h;
+        vNormalW = normalize(vec3(-hx/e, 1.0, -hz/e));
+        vWorld = w.xyz;
+        vec4 mvPosition = viewMatrix * w;
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `
+      #include <fog_pars_fragment>
+      uniform float time; uniform float wLight; uniform vec3 deep, shallow, sky, sunDir, sunCol, me; uniform vec4 ripples[4];
+      varying vec3 vWorld; varying vec3 vNormalW;
+      void main(){
+        vec3 n = normalize(vNormalW);
+        // fine ripple detail
+        float d1 = sin(vWorld.x*6.0 + time*2.0 + sin(vWorld.z*3.0))*0.5;
+        float d2 = sin(vWorld.z*7.0 - time*1.7 + sin(vWorld.x*2.5))*0.5;
+        n = normalize(n + vec3(d1, 0.0, d2) * 0.08);
+        float glow = 0.0;
+        for (int i=0;i<4;i++){
+          vec4 rp = ripples[i];
+          if (rp.z > 0.0) {
+            float d = distance(vWorld.xz, rp.xy);
+            float age = rp.z;
+            float ring = sin(d*7.0 - age*7.0) * exp(-d*0.55) * exp(-age*1.1) * step(d, age*2.2 + 0.4);
+            n += vec3(ring*0.5, 0.0, ring*0.5);
+            glow += max(ring, 0.0) * 0.6;
+          }
+        }
+        n = normalize(n);
+        vec3 V = normalize(cameraPosition - vWorld);
+        float fres = pow(1.0 - max(dot(V, n), 0.0), 3.0);
+        float r = length(vWorld.xz);
+        vec3 base = wLight * mix(deep, shallow, smoothstep(${(LAKE_R - 9).toFixed(1)}, ${(LAKE_R + 1).toFixed(1)}, r));
+        vec3 col = mix(base, sky, fres * 0.85);
+        vec3 R = reflect(-sunDir, n);
+        float spec = pow(max(dot(R, V), 0.0), 140.0);
+        col += sunCol * spec * 1.6 + sunCol * glow * 0.4;
+        float alpha = 0.86 + fres * 0.12;
+        alpha *= 1.0 - 0.45 * me.z * smoothstep(7.0, 1.5, distance(vWorld.xz, me.xy)); // a clearer window around a player in the water, so the body shows under the surface
+        gl_FragColor = vec4(col, alpha);
+        #include <fog_fragment>
+      }`
+  });
+  const water = new THREE.Mesh(new THREE.CircleGeometry(LAKE_R + 2.2, 128), waterMat);
+  water.rotation.x = -Math.PI / 2; water.position.y = 0;
+  scene.add(water);
+  const rippleSlots = waterUniforms.ripples.value;
+  function ripple(x, z) { // find oldest slot
+    let best = 0, bestAge = -1;
+    for (let i = 0; i < 4; i++) { const a = rippleSlots[i].z; if (a < 0) { best = i; break; } if (a > bestAge) { bestAge = a; best = i; } }
+    rippleSlots[best].set(x, z, 0.001, 1);
+  }
+
+  // shared materials
+  const matWood = new THREE.MeshStandardMaterial({ color: 0x8a6a46, roughness: 0.9 });
+  const matWoodDark = new THREE.MeshStandardMaterial({ color: 0x5a4229, roughness: 0.95 });
+  const matStone = new THREE.MeshStandardMaterial({ color: 0x7a776c, roughness: 1 });
+  const matTrunk = new THREE.MeshStandardMaterial({ color: 0x5c4330, roughness: 1 });
+  const matPine = new THREE.MeshStandardMaterial({ color: 0x2f5a3a, roughness: 0.9 });
+  const matPine2 = new THREE.MeshStandardMaterial({ color: 0x3f6f3c, roughness: 0.9 });
+  const matLeaf = new THREE.MeshStandardMaterial({ color: 0x7a9a3c, roughness: 0.9 });
+  const matLeaf2 = new THREE.MeshStandardMaterial({ color: 0xb98a3a, roughness: 0.9 });
+  const matReed = new THREE.MeshStandardMaterial({ color: 0x8f9a4a, roughness: 1 });
+
+  function box(w, h, d, mat, x, y, z, shadow = true) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; return m;
+  }
+
+  // dock
+  const dockGroup = (function buildDock() {
+    const g = new THREE.Group();
+    const len = DOCK.z0 - DOCK.z1;
+    for (let i = 0; i < Math.floor(len / 0.5); i++) {
+      const p = box(DOCK.w, 0.08, 0.44, i % 3 === 0 ? matWoodDark : matWood, DOCK.x, DOCK.y, DOCK.z0 - 0.25 - i * 0.5);
+      p.rotation.y = (hash(i, 3) - 0.5) * 0.02;
+      g.add(p);
+    }
+    g.add(box(0.14, 0.14, len, matWoodDark, DOCK.x - DOCK.w / 2 + 0.2, DOCK.y - 0.1, (DOCK.z0 + DOCK.z1) / 2));
+    g.add(box(0.14, 0.14, len, matWoodDark, DOCK.x + DOCK.w / 2 - 0.2, DOCK.y - 0.1, (DOCK.z0 + DOCK.z1) / 2));
+    for (let z = DOCK.z1 + 0.3; z <= DOCK.z0; z += 3) {
+      for (const sx of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 3.8, 8), matWoodDark);
+        post.position.set(DOCK.x + sx * (DOCK.w / 2 - 0.1), DOCK.y - 1.4, z); post.castShadow = true; g.add(post);
+      }
+    }
+    // rail posts at the end
+    for (const sx of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 1.0, 8), matWood);
+      post.position.set(DOCK.x + sx * (DOCK.w / 2 - 0.1), DOCK.y + 0.5, DOCK.z1 + 0.3); post.castShadow = true; g.add(post);
+    }
+    // lantern
+    const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 2.2, 8), matWoodDark);
+    lp.position.set(DOCK.x + DOCK.w / 2 - 0.1, DOCK.y + 1.1, DOCK.z0 - 0.6); lp.castShadow = true; g.add(lp);
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 0.28), new THREE.MeshStandardMaterial({ color: 0xffd080, emissive: 0xffb050, emissiveIntensity: 1.6 }));
+    lamp.position.set(DOCK.x + DOCK.w / 2 - 0.1, DOCK.y + 2.25, DOCK.z0 - 0.6); g.add(lamp);
+    const light = new THREE.PointLight(0xffb060, 1.6, 12, 2); light.position.copy(lamp.position); g.add(light);
+    // a bait bucket and a crate
+    const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.36, 12), new THREE.MeshStandardMaterial({ color: 0x3b5b74, roughness: 0.6 }));
+    bucket.position.set(DOCK.x - 0.9, DOCK.y + 0.22, DOCK.z1 + 1.4); bucket.castShadow = true; g.add(bucket);
+    g.add(box(0.6, 0.45, 0.6, matWood, DOCK.x + 0.8, DOCK.y + 0.26, DOCK.z0 - 2.2));
+    scene.add(g);
+    return g;
+  })();
+
+  // campfires: the base camp one plus any a player builds
+  // a built fire keeps burning for as long as the player who built it is at the lake; it goes when they leave
+  const GRILL_REACH = 3.6;
+  const fires = new Map(); // id -> { id, g, flame, flame2, light, x, z, y, owner, phase }
+  const flameMatA = new THREE.MeshBasicMaterial({ color: 0xffa030, transparent: true, opacity: 0.9 });
+  const flameMatB = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.95 });
+  const flameGeoA = new THREE.ConeGeometry(0.32, 0.9, 8), flameGeoB = new THREE.ConeGeometry(0.18, 0.6, 8);
+  const logGeo = new THREE.CylinderGeometry(0.09, 0.1, 1.1, 7);
+  function makeFire(id, x, z, owner) {
+    if (fires.has(id)) return fires.get(id);
+    const g = new THREE.Group();
+    const y = terrainH(x, z);
+    const h0 = strHash(id);
+    for (let i = 0; i < 9; i++) {
+      const a = i / 9 * TAU;
+      const st = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 + hash(i + h0, 1) * 0.08, 0), matStone);
+      st.position.set(x + Math.cos(a) * 0.85, y + 0.1, z + Math.sin(a) * 0.85);
+      st.rotation.set(hash(i, 2 + h0) * 3, hash(i, 4) * 3, 0); st.castShadow = true; g.add(st);
+    }
+    for (let i = 0; i < 3; i++) {
+      const l = new THREE.Mesh(logGeo, matWoodDark);
+      l.position.set(x, y + 0.14, z); l.rotation.set(Math.PI / 2 - 0.5, 0, i * 2.1 + h0 * 0.001); l.castShadow = true; g.add(l);
+    }
+    const flame = new THREE.Mesh(flameGeoA, flameMatA); flame.position.set(x, y + 0.55, z); g.add(flame);
+    const flame2 = new THREE.Mesh(flameGeoB, flameMatB); flame2.position.set(x, y + 0.5, z); g.add(flame2);
+    const light = new THREE.PointLight(0xff9a3c, 2.2, 15, 2); light.position.set(x, y + 1.0, z); g.add(light);
+    scene.add(g);
+    const f = { id, g, flame, flame2, light, x, z, y, owner, phase: Math.random() * 10 };
+    fires.set(id, f);
+    return f;
+  }
+  function removeFire(id) {
+    const f = fires.get(id); if (!f) return;
+    scene.remove(f.g); fires.delete(id);
+    for (const gr of [...grills.values()]) if (gr.fireId === id) removeGrill(gr.id);
+  }
+  function nearestFire(x, z, maxD) {
+    let best = null, bd = maxD;
+    for (const f of fires.values()) { const d = Math.hypot(wrapCoord(f.x - x), wrapCoord(f.z - z)); if (d < bd) { bd = d; best = f; } } // measured across the world's seam too
+    return best;
+  }
+  makeFire('camp', CAMP.x, CAMP.z, null);
+  (function benches() {
+    for (const [dx, dz, rot] of [[-2.3, 0.4, 0.3], [1.9, -1.6, -1.1], [0.8, 2.4, 1.3]]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, 2.2, 10), matWood);
+      const bx = CAMP.x + dx, bz = CAMP.z + dz;
+      b.position.set(bx, terrainH(bx, bz) + 0.28, bz); b.rotation.set(Math.PI / 2, 0, rot); b.castShadow = true; b.receiveShadow = true; scene.add(b);
+    }
+  })();
+
+  // grills: a skewered fish leaning over a fire, owned by whoever cooked it
+  const grills = new Map(); // id -> { id, g, x, z, fish, wt, owner, ownerName, fireId }
+  const skewerGeo = new THREE.CylinderGeometry(0.018, 0.025, 1.3, 5);
+  const cookedFishGeo = new THREE.SphereGeometry(0.2, 10, 8);
+  const matSkewer = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.9 });
+  const matCooked = new THREE.MeshStandardMaterial({ color: 0xc98a4a, roughness: 0.6 });
+  function makeGrill(id, x, z, fish, wt, owner, ownerName, fireId) {
+    if (grills.has(id)) return grills.get(id);
+    const g = new THREE.Group();
+    const f = fires.get(fireId);
+    const y = terrainH(x, z);
+    const toward = f ? Math.atan2(f.x - x, f.z - z) : 0;
+    const stick = new THREE.Mesh(skewerGeo, matSkewer);
+    stick.position.set(x, y + 0.55, z); stick.rotation.set(0.55, toward, 0, 'YXZ'); stick.castShadow = true; g.add(stick);
+    const body = new THREE.Mesh(cookedFishGeo, matCooked);
+    body.scale.set(0.9, 0.5, 2.0);
+    body.position.set(x + Math.sin(toward) * 0.5, y + 1.0, z + Math.cos(toward) * 0.5); body.rotation.set(0.55, toward, 0, 'YXZ'); body.castShadow = true; g.add(body);
+    const lab = makeLabel(fish + ' · ' + (ownerName || 'Angler'), { bg: 'rgba(11,26,32,0.5)' });
+    lab.scale.multiplyScalar(0.6); lab.position.set(x, y + 1.4, z); g.add(lab);
+    scene.add(g);
+    const gr = { id, g, x, z, fish, wt, owner, ownerName, fireId };
+    grills.set(id, gr); return gr;
+  }
+  function removeGrill(id) { const gr = grills.get(id); if (!gr) return; scene.remove(gr.g); grills.delete(id); }
+  function nearestGrill(x, z, maxD) {
+    let best = null, bd = maxD;
+    for (const gr of grills.values()) { const d = Math.hypot(wrapCoord(gr.x - x), wrapCoord(gr.z - z)); if (d < bd) { bd = d; best = gr; } }
+    return best;
+  }
+  function grillSlot(fire, id) { const a = (strHash(id) % 10) / 10 * TAU; return { x: fire.x + Math.cos(a) * 1.35, z: fire.z + Math.sin(a) * 1.35 }; }
+
+  // things to pick up: fallen branches in the woods, loose stones along the shore
+  const pickups = []; // { type, mesh, x, z, taken }
+  const branchGeo = new THREE.CylinderGeometry(0.045, 0.07, 0.9, 6);
+  const stoneGeo = new THREE.DodecahedronGeometry(0.16, 0);
+  (function placePickups() {
+    let n = 0, tries = 0;
+    while (n < 56 && tries++ < 4000) {
+      const a = Math.random() * TAU, r = LAKE_R + 5 + Math.random() * 40;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) < 3 && z > LAKE_R - 2 && z < LAKE_R + 14) continue;
+      const h = terrainH(x, z); if (h < 0.1) continue;
+      const m = new THREE.Mesh(branchGeo, matWoodDark);
+      m.position.set(x, h + 0.06, z); m.rotation.set(0, Math.random() * TAU, Math.PI / 2 + (Math.random() - 0.5) * 0.3, 'YXZ'); m.castShadow = true; scene.add(m);
+      pickups.push({ type: 'wood', mesh: m, x, z, taken: 0 }); n++;
+    }
+    n = 0; tries = 0;
+    while (n < 36 && tries++ < 4000) {
+      const a = Math.random() * TAU, r = LAKE_R + 1.4 + Math.random() * 6;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) < 2.5 && z > 0) continue;
+      const h = terrainH(x, z); if (h < -0.05) continue;
+      const m = new THREE.Mesh(stoneGeo, matStone);
+      m.position.set(x, h + 0.1, z); m.rotation.set(Math.random() * 3, Math.random() * 3, 0); m.scale.set(1, 0.75, 1); m.castShadow = true; scene.add(m);
+      pickups.push({ type: 'rock', mesh: m, x, z, taken: 0 }); n++;
+    }
+  })();
+  function nearestPickup(x, z, maxD) {
+    let best = null, bd = maxD;
+    for (const p of pickups) { if (p.taken) continue; const d = Math.hypot(p.x - x, p.z - z); if (d < bd) { bd = d; best = p; } }
+    return best;
+  }
+
+  // trees, rocks, reeds (instanced)
+  (function scatter() {
+    const dummy = new THREE.Object3D();
+    const pines = [], rounds = [];
+    let tries = 0;
+    while (pines.length + rounds.length < 260 && tries++ < 6000) {
+      const a = Math.random() * TAU, r = LAKE_R + 7 + Math.pow(Math.random(), 0.7) * 125;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) < 7 && z > LAKE_R - 2 && z < LAKE_R + 16) continue; // path to the dock
+      if (Math.hypot(x - CAMP.x, z - CAMP.z) < 6) continue;
+      if (Math.hypot(x - 2.2, z - (LAKE_R + 9)) < 9) continue; // arrival clearing
+      const h = terrainH(x, z);
+      if (h > 19) continue;
+      const d = fbm(x * 0.05 + 3, z * 0.05 + 9);
+      if (d < 0.38 && r > LAKE_R + 14) continue; // clearings
+      (h > 7 || Math.random() < 0.68 ? pines : rounds).push([x, h, z, 0.75 + Math.random() * 0.9, Math.random() * TAU]);
+    }
+    function instanced(geo, mat, list, fn, tile) {
+      const m = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach((t, i) => { fn(t, dummy); dummy.updateMatrix(); m.setMatrixAt(i, dummy.matrix); });
+      m.castShadow = true; m.receiveShadow = true; m.instanceMatrix.needsUpdate = true; scene.add(m);
+      if (tile !== false) for (const ox of [-1, 0, 1]) for (const oz of [-1, 0, 1]) { // repeat on the neighbouring tiles
+        if (!ox && !oz) continue;
+        const c = new THREE.InstancedMesh(geo, mat, list.length); c.instanceMatrix = m.instanceMatrix; c.castShadow = false; c.receiveShadow = true;
+        c.position.set(ox * TILE, 0, oz * TILE); scene.add(c);
+      }
+      return m;
+    }
+    instanced(new THREE.CylinderGeometry(0.12, 0.2, 1.6, 6), matTrunk, pines, (t, d) => { d.position.set(t[0], t[1] + 0.7 * t[3], t[2]); d.scale.setScalar(t[3]); d.rotation.set(0, t[4], 0); });
+    instanced(new THREE.ConeGeometry(1.5, 2.8, 7), matPine, pines, (t, d) => { d.position.set(t[0], t[1] + 2.4 * t[3], t[2]); d.scale.setScalar(t[3]); d.rotation.set(0, t[4], 0); });
+    instanced(new THREE.ConeGeometry(1.1, 2.4, 7), matPine2, pines, (t, d) => { d.position.set(t[0], t[1] + 3.9 * t[3], t[2]); d.scale.setScalar(t[3]); d.rotation.set(0, t[4] + 0.4, 0); });
+    instanced(new THREE.ConeGeometry(0.7, 1.8, 7), matPine, pines, (t, d) => { d.position.set(t[0], t[1] + 5.2 * t[3], t[2]); d.scale.setScalar(t[3]); d.rotation.set(0, t[4] + 0.8, 0); });
+    instanced(new THREE.CylinderGeometry(0.14, 0.22, 2.0, 6), matTrunk, rounds, (t, d) => { d.position.set(t[0], t[1] + 0.9 * t[3], t[2]); d.scale.setScalar(t[3]); d.rotation.set(0, t[4], 0); });
+    const half = Math.floor(rounds.length / 2);
+    instanced(new THREE.IcosahedronGeometry(1.5, 1), matLeaf, rounds.slice(0, half), (t, d) => { d.position.set(t[0], t[1] + 2.6 * t[3], t[2]); d.scale.set(t[3], t[3] * 0.9, t[3]); d.rotation.set(0, t[4], 0); });
+    instanced(new THREE.IcosahedronGeometry(1.5, 1), matLeaf2, rounds.slice(half), (t, d) => { d.position.set(t[0], t[1] + 2.6 * t[3], t[2]); d.scale.set(t[3], t[3] * 0.9, t[3]); d.rotation.set(0, t[4], 0); });
+
+    const rocks = [];
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * TAU, r = i < 25 ? LAKE_R + 1 + Math.random() * 4 : LAKE_R + 10 + Math.random() * 120;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) < 3 && z > 0) continue;
+      rocks.push([x, terrainH(x, z), z, 0.25 + Math.random() * (i < 25 ? 0.4 : 1.2), Math.random() * TAU]);
+    }
+    instanced(new THREE.DodecahedronGeometry(1, 0), matStone, rocks, (t, d) => { d.position.set(t[0], t[1] + t[3] * 0.35, t[2]); d.scale.set(t[3] * 1.3, t[3] * 0.8, t[3]); d.rotation.set(t[4], t[4] * 2, 0); });
+
+    const reeds = [];
+    for (let i = 0; i < 420; i++) {
+      const a = Math.random() * TAU, r = LAKE_R - 1.2 + Math.random() * 2.6;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) < 2.6 && z > 0) continue;
+      if (fbm(x * 0.2, z * 0.2) < 0.45) continue;
+      reeds.push([x, terrainH(x, z), z, 0.8 + Math.random() * 0.8, Math.random() * 0.25]);
+    }
+    const reedMesh = instanced(new THREE.CylinderGeometry(0.015, 0.03, 1.6, 4), matReed, reeds, (t, d) => { d.position.set(t[0], Math.max(t[1], -0.3) + 0.7 * t[3], t[2]); d.scale.set(1, t[3], 1); d.rotation.set(t[4], 0, t[4] * 0.5); }, false);
+    reedMesh.castShadow = false;
+  })();
+
+  // drifting motes above the water
+  const motes = (function () {
+    const n = reducedMotion ? 0 : 260;
+    const geo = new THREE.BufferGeometry();
+    const arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { const a = Math.random() * TAU, r = Math.random() * (LAKE_R + 6); arr[i * 3] = Math.cos(a) * r; arr[i * 3 + 1] = 0.3 + Math.random() * 2.5; arr[i * 3 + 2] = Math.sin(a) * r; }
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffe9b8, size: 0.06, transparent: true, opacity: 0.7, sizeAttenuation: true }));
+    scene.add(pts); return pts;
+  })();
+
+  // ---------------------------------------------------------------- daylight: follows the viewer's own clock
+  function localHour() {
+    if (typeof window.LAKE_HOUR === 'number') return window.LAKE_HOUR;
+    const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  }
+  // keyed by sun elevation (sine of altitude): deep night, late twilight, horizon, low sun, high sun
+  const STOPS = [
+    { e: -0.45, top: 0x050912, mid: 0x0a1222, hor: 0x141d33, fog: 0x0c1422, sunCol: 0xc9d4ff, sunI: 0.30, hemiSky: 0x24324f, hemiGnd: 0x10140f, hemiI: 0.30, wSky: 0x1a2740, wSun: 0xdde5ff, wL: 0.22, exp: 0.78, stars: 1.0, glow: 0.7 },
+    { e: -0.12, top: 0x0f1a36, mid: 0x3a3658, hor: 0xb0603a, fog: 0x3e3344, sunCol: 0xffb070, sunI: 0.12, hemiSky: 0x484a70, hemiGnd: 0x2a2218, hemiI: 0.38, wSky: 0x5a4a60, wSun: 0xffc080, wL: 0.45, exp: 0.82, stars: 0.55, glow: 0.8 },
+    { e: 0.03,  top: 0x3b5a8a, mid: 0xc48a6a, hor: 0xffa860, fog: 0xe8b088, sunCol: 0xff9a4a, sunI: 1.3, hemiSky: 0x8a90b0, hemiGnd: 0x4a3a28, hemiI: 0.48, wSky: 0xd8a080, wSun: 0xffb070, wL: 0.8, exp: 0.9, stars: 0, glow: 1.25 },
+    { e: 0.25,  top: 0x4f7fb0, mid: 0xb9cfe0, hor: 0xf5c38b, fog: 0xf0cfa0, sunCol: 0xffd3a1, sunI: 2.0, hemiSky: 0xa9c4dc, hemiGnd: 0x4f4530, hemiI: 0.6, wSky: 0xa9c6d8, wSun: 0xffd9a8, wL: 1.0, exp: 0.92, stars: 0, glow: 1.0 },
+    { e: 0.80,  top: 0x2a64b0, mid: 0x8fb9e0, hor: 0xcfe0ee, fog: 0xc9dae8, sunCol: 0xfff1dc, sunI: 2.0, hemiSky: 0xa9c8e4, hemiGnd: 0x4a4a34, hemiI: 0.5, wSky: 0xa9c8e4, wSun: 0xfff6e8, wL: 1.0, exp: 0.88, stars: 0, glow: 0.9 }
+  ];
+  const COLOR_KEYS = ['top', 'mid', 'hor', 'fog', 'sunCol', 'hemiSky', 'hemiGnd', 'wSky', 'wSun'];
+  for (const st of STOPS) for (const k of COLOR_KEYS) st[k] = new THREE.Color(st[k]);
+  const live = {}; for (const k of COLOR_KEYS) live[k] = new THREE.Color();
+  // point every consumer at the live colours once, then only the numbers change per frame
+  skyMat.uniforms.top.value = live.top; skyMat.uniforms.mid.value = live.mid; skyMat.uniforms.hor.value = live.hor; skyMat.uniforms.sunCol.value = live.sunCol;
+  scene.fog.color = live.fog; sun.color = live.sunCol; hemi.color = live.hemiSky; hemi.groundColor = live.hemiGnd;
+  waterUniforms.sky.value = live.wSky; waterUniforms.sunCol.value = live.wSun;
+  function applyDaylight() {
+    const h = localHour();
+    const ang = (h / 24) * TAU - Math.PI / 2; // 06:00 on the eastern horizon, noon overhead, 18:00 setting in the west
+    const e = Math.sin(ang), cosA = Math.cos(ang);
+    if (e < -0.02) sunDir.set(-cosA * 0.8, Math.max(0.3, -e), -0.5).normalize(); // moon, opposite the sun
+    else sunDir.set(cosA, Math.max(e, 0.04), -0.45).normalize();
+    let i = 0; while (i < STOPS.length - 2 && e > STOPS[i + 1].e) i++;
+    const A = STOPS[i], B = STOPS[i + 1], t = clamp((e - A.e) / (B.e - A.e), 0, 1);
+    for (const k of COLOR_KEYS) live[k].copy(A[k]).lerp(B[k], t);
+    sun.intensity = lerp(A.sunI, B.sunI, t); hemi.intensity = lerp(A.hemiI, B.hemiI, t);
+    renderer.toneMappingExposure = lerp(A.exp, B.exp, t);
+    stars.material.opacity = lerp(A.stars, B.stars, t);
+    skyMat.uniforms.glowK.value = lerp(A.glow, B.glow, t);
+    waterUniforms.wLight.value = lerp(A.wL, B.wL, t);
+  }
+  applyDaylight();
+
+  // ---------------------------------------------------------------- characters
+  const skinTones = [0xf1c9a5, 0xe0ac7e, 0xc68642, 0x8d5524, 0x5c3a1e, 0xffdbb4];
+  const hairTones = [0x2b1b12, 0x4a2f1b, 0x1a1a1a, 0x8b5a2b, 0xd9b36b, 0x7a7a7a];
+  const hatTones = [0x6b7a4a, 0xb08a4e, 0x3d4f66, 0x8a4a3f, 0xd9cfb8];
+  // what a player may choose: eight colours for each piece of clothing; skin and hair stay with the device's look seed
+  const SHIRT_COLORS = [0xc63939, 0xe3c234, 0x55c639, 0x95d6e4, 0x3961c6, 0xaa39c6, 0xe887a8, 0x262626];
+  const SHIRT_HUES = [0, 0.14, 0.3, 0.53, 0.62, 0.8, 0.94, 0];  // a hue for each shirt, still sent for players on the older page
+  //   red, yellow, green, pale sky blue, blue, purple, pink, black
+  const PANTS_COLORS = [0x3b3f5c, 0x5a4a3a, 0x2f4a3a, 0x6b6b6b, 0x2a2a2a, 0xc9b89a, 0xd486a3, 0x2456c8]; // navy, brown, forest, grey, black, khaki, pink, strong blue
+  const CAP_COLORS = [...hatTones, 0xd9382e, 0xe48fae, 0x1f1f1f];                       // olive, tan, navy, rust, cream, red, pink, black
+  const SHOE_COLORS = [0x3a2a1c, 0x1a1a1a, 0x7a6a5a, 0xf2f2f2, 0xd9382e, 0x3a7bd5, 0xe58cad, 0x3f9a4a]; // brown, black, taupe, white, red, blue, pink, green
+  const pick = (list, i) => Number.isInteger(i) && i >= 0 && i < list.length ? i : -1;
+  function makeLabel(text, opts = {}) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    const font = (opts.bold ? '700 ' : '400 ') + '44px "Atkinson Hyperlegible", Arial, sans-serif';
+    ctx.font = font;
+    // wrap long text (speech bubbles) onto up to four lines
+    const maxW = 560, lines = [];
+    for (const para of String(text).split('\n')) {
+      let line = '';
+      for (const word of para.split(' ')) {
+        const trial = line ? line + ' ' + word : word;
+        if (ctx.measureText(trial).width > maxW && line) { lines.push(line); line = word; } else line = trial;
+      }
+      lines.push(line);
+    }
+    if (lines.length > 4) { lines.length = 4; lines[3] += '…'; }
+    const lineH = 52;
+    const w = Math.min(Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) + 48, maxW + 48), h = lines.length * lineH + 24;
+    c.width = w; c.height = h;
+    ctx.font = font;
+    ctx.fillStyle = opts.bg || 'rgba(11,26,32,0.55)';
+    const r = 20;
+    ctx.beginPath(); ctx.moveTo(r, 0); ctx.lineTo(w - r, 0); ctx.quadraticCurveTo(w, 0, w, r); ctx.lineTo(w, h - r); ctx.quadraticCurveTo(w, h, w - r, h); ctx.lineTo(r, h); ctx.quadraticCurveTo(0, h, 0, h - r); ctx.lineTo(0, r); ctx.quadraticCurveTo(0, 0, r, 0); ctx.fill();
+    ctx.fillStyle = opts.fg || '#fbf5ea';
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    lines.forEach((l, i) => ctx.fillText(l, w / 2, 12 + lineH * (i + 0.5) + 2));
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.minFilter = THREE.LinearFilter;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sp.scale.set(w / 240, h / 240, 1);
+    sp.center.set(0.5, 0); // anchored at its bottom edge so taller bubbles grow upward
+    sp.renderOrder = 10;
+    return sp;
+  }
+
+  // fit = { p, c, o, s }: chosen pants, cap, shoe and shirt colours as palette indexes, or -1 for the look seed's own choice
+  function makeHuman(hue, seed, fit) {
+    fit = { p: pick(PANTS_COLORS, fit && fit.p), c: pick(CAP_COLORS, fit && fit.c), o: pick(SHOE_COLORS, fit && fit.o), s: pick(SHIRT_COLORS, fit && fit.s) };
+    const g = new THREE.Group();
+    const sr = (i) => hash(seed * 13 + i, seed * 7 + 1);
+    const shirt = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue, 0.55, 0.5), roughness: 0.85 });
+    const pants = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    const skin = new THREE.MeshStandardMaterial({ color: skinTones[Math.floor(sr(2) * skinTones.length)], roughness: 0.7 });
+    const hair = new THREE.MeshStandardMaterial({ color: hairTones[Math.floor(sr(3) * hairTones.length)], roughness: 0.9 });
+    const hatMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    const boots = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    const ch = { shirt, pants, hatMat, boots, hue, seed, fit };
+    applyFit(ch);
+
+
+    // neutral build: even shoulders and hips, slim limbs, same silhouette for everyone
+    const legL = new THREE.Group(), legR = new THREE.Group();
+    for (const [leg, sx] of [[legL, -1], [legR, 1]]) {
+      leg.position.set(sx * 0.12, 0.6, 0.035); // legs sit a touch forward so the hem reads as a slight seat behind
+      leg.add(box(0.19, 0.52, 0.2, pants, 0, -0.26, 0));
+      leg.add(box(0.2, 0.11, 0.28, boots, 0, -0.56, 0.03));
+      g.add(leg);
+    }
+    const torso = new THREE.Group(); torso.position.y = 0.6; g.add(torso);
+    // torso: one flat-shaded tapered block, narrow across the shoulders and wider at the hem,
+    // with the top corners chopped so the shoulders slope instead of squaring off
+    const prism = (pts, depth, mat) => {
+      const shape = new THREE.Shape(pts.map((p) => new THREE.Vector2(p[0], p[1])));
+      const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+      geo.translate(0, 0, -depth / 2);
+      const m = new THREE.Mesh(geo, mat); m.castShadow = true; return m;
+    };
+    torso.add(box(0.4, 0.18, 0.22, pants, 0, 0.04, 0.0)); // hips, tucked inside the hem
+    // body: one gentle taper, a little narrower across the shoulders than at the hem
+    torso.add(prism([[-0.25, 0.0], [0.25, 0.0], [0.16, 0.6], [-0.16, 0.6]], 0.25, shirt)); // shoulders as wide as the head
+    const armL = new THREE.Group(), armR = new THREE.Group(), elbows = {};
+    for (const [arm, sx] of [[armL, -1], [armR, 1]]) {
+      arm.position.set(sx * 0.16, 0.6, 0);
+      // upper arm: its inner edge sits against the body and the outer top corner is cut away,
+      // so the sleeve tapers into the shoulder instead of sitting on it as a square block
+      const sleeve = [[0, 0], [0, -0.38], [0.14, -0.38], [0.14, -0.12], [0.05, 0]].map((p) => [p[0] * sx, p[1]]);
+      if (sx < 0) sleeve.reverse();
+      const tilt = new THREE.Group(); tilt.rotation.z = sx * 0.06; arm.add(tilt);
+      tilt.add(prism(sleeve, 0.14, shirt));
+      const elbow = new THREE.Group(); elbow.position.set(sx * 0.07, -0.38, 0); tilt.add(elbow); // forearms bend here
+      elbow.add(box(0.115, 0.3, 0.125, skin, 0, -0.15, 0));
+      elbows[sx < 0 ? 'L' : 'R'] = elbow;
+      torso.add(arm);
+    }
+    const head = new THREE.Group(); head.position.y = 0.6; torso.add(head); // sits directly on the shoulders
+    head.add(box(0.32, 0.34, 0.32, skin, 0, 0.18, 0));
+    // hair under the cap: covers the back and sides of the head down to the nape, plus a fringe in front
+    head.add(box(0.40, 0.28, 0.28, hair, 0, 0.22, -0.10));   // back and sides: wider and deeper, ending just above the nape
+    head.add(box(0.40, 0.07, 0.20, hair, 0, 0.325, 0.10));   // fringe: thicker and wider
+    // a plain cap with a short front brim, the same for everyone
+    const hat = new THREE.Group();
+    const crown = box(0.44, 0.15, 0.44, hatMat, 0, 0.43, -0.01);
+    const brim = box(0.36, 0.035, 0.16, hatMat, 0, 0.37, 0.29); brim.rotation.x = 0.12;
+    const button = box(0.05, 0.03, 0.05, hatMat, 0, 0.515, -0.01);
+    hat.add(crown, brim, button);
+    head.add(hat);
+    // eyes
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+    for (const sx of [-1, 1]) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.02), eyeMat); e.position.set(sx * 0.075, 0.19, 0.165); head.add(e); }
+
+    // fishing rod in right hand
+    const rod = new THREE.Group();
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.03, 2.3, 6), new THREE.MeshStandardMaterial({ color: 0x3a2d22, roughness: 0.5, metalness: 0.2 }));
+    pole.position.y = 1.0; rod.add(pole);
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0x8a6a46 })); grip.position.y = 0.1; rod.add(grip);
+    const reel = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.06, 10), new THREE.MeshStandardMaterial({ color: 0xb0b0b0, metalness: 0.6, roughness: 0.4 })); reel.rotation.z = Math.PI / 2; reel.position.set(0.0, 0.42, 0.06); rod.add(reel);
+    const tip = new THREE.Object3D(); tip.position.y = 2.15; rod.add(tip);
+    rod.position.set(0.08, -0.64, 0.06); rod.rotation.x = -0.35;
+    armR.add(rod);
+    // the grilled fish on its skewer, held across both hands in front of the face while eating
+    const snack = new THREE.Group();
+    const snackFish = new THREE.Mesh(cookedFishGeo, matCooked); snackFish.scale.set(1.0, 0.48, 0.52); snack.add(snackFish);
+    const snackStick = new THREE.Mesh(skewerGeo, matSkewer); snackStick.rotation.z = Math.PI / 2; snackStick.scale.y = 0.46; snack.add(snackStick);
+    snack.visible = false;
+    torso.add(snack); // placed between the two hands every frame (animate), so both hands always hold it
+
+    // line + bobber (in world space)
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]);
+    const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xf5f0e0, transparent: true, opacity: 0.8 }));
+    line.frustumCulled = false; line.visible = false; scene.add(line);
+    const bobber = new THREE.Group();
+    const bTop = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), new THREE.MeshStandardMaterial({ color: 0xd8382e, roughness: 0.4 }));
+    const bBot = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), new THREE.MeshStandardMaterial({ color: 0xf7f3ea, roughness: 0.4 }));
+    bTop.position.y = 0.05; bBot.position.y = -0.05; bobber.add(bTop, bBot); bobber.visible = false; scene.add(bobber);
+
+    g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+    const label = makeLabel(' ', {}); label.position.y = 1.85; g.add(label);
+    const bubble = makeLabel(' ', { bg: 'rgba(251,245,234,0.92)', fg: '#0b1a20' }); bubble.position.y = 2.25; bubble.visible = false; g.add(bubble);
+    scene.add(g);
+    return Object.assign(ch, { g, legL, legR, armL, armR, torso, head, rod, tip, snack, sitK: 0, elbowL: elbows.L, elbowR: elbows.R, line, bobber, label, bubble, phase: Math.random() * 10, bubbleUntil: 0, currentName: '' });
+  }
+  // colours that follow a choice, or the seed's own when nothing is chosen (pants echo the shirt, cap from the seed, brown boots)
+  function applyFit(ch) {
+    const sr = (i) => hash(ch.seed * 13 + i, ch.seed * 7 + 1);
+    if (ch.fit.s >= 0) ch.shirt.color.setHex(SHIRT_COLORS[ch.fit.s]); else ch.shirt.color.setHSL(ch.hue, 0.55, 0.5); // a chosen shirt, or a plain one from the hue
+    if (ch.fit.p >= 0) ch.pants.color.setHex(PANTS_COLORS[ch.fit.p]); else ch.pants.color.setHSL((ch.hue + 0.5 + sr(1) * 0.1) % 1, 0.25, 0.26);
+    ch.hatMat.color.setHex(ch.fit.c >= 0 ? CAP_COLORS[ch.fit.c] : hatTones[Math.floor(sr(4) * hatTones.length)]);
+    ch.boots.color.setHex(ch.fit.o >= 0 ? SHOE_COLORS[ch.fit.o] : 0x3a2a1c);
+  }
+  function setFit(ch, fit) {
+    const f = { p: pick(PANTS_COLORS, fit.p), c: pick(CAP_COLORS, fit.c), o: pick(SHOE_COLORS, fit.o), s: pick(SHIRT_COLORS, fit.s) };
+    if (f.p === ch.fit.p && f.c === ch.fit.c && f.o === ch.fit.o && f.s === ch.fit.s) return;
+    ch.fit = f; applyFit(ch);
+  }
+
+  function setName(ch, name) {
+    if (ch.currentName === name) return;
+    ch.currentName = name;
+    const nl = makeLabel(name || 'Angler', { bold: true });
+    nl.position.y = 1.85;
+    ch.g.remove(ch.label); ch.label.material.map.dispose(); ch.label.material.dispose();
+    ch.label = nl; ch.g.add(nl);
+  }
+  function say(ch, text) {
+    const nb = makeLabel(text, { bg: 'rgba(251,245,234,0.92)', fg: '#0b1a20' });
+    nb.position.y = 2.25;
+    ch.g.remove(ch.bubble); ch.bubble.material.map.dispose(); ch.bubble.material.dispose();
+    ch.bubble = nb; ch.g.add(nb); ch.bubbleUntil = performance.now() + 6500;
+  }
+  function setShirt(ch, hue) { ch.hue = hue; applyFit(ch); }
+
+  // pose: state 'idle' | 'walk' | 'run' | 'cast' | 'fish' | 'reel'; castP = cast progress 0..1; dancing overlays the upper body on idle or walking
+  // rod angles are given in the character's own frame (0 = straight up, positive = tipped forward) and
+  // converted to the arm's local rotation, so the rod points forward over the water instead of behind the back
+  const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3(), xAxis = new THREE.Vector3(1, 0, 0);
+  // The appreciation dance is a cha-cha, after the 1996 Dancing Baby: weight shifting side to side on
+  // "two, three, cha-cha-cha" (two slow steps, then three quick ones), the hips swinging out over the
+  // stepping foot, the shoulders twisting with it, and bent arms pumping in front, one up as the other goes down.
+  function chacha(t) {
+    const BAR = 2.6, STEPS = [0, 0.23, 0.46, 0.64, 0.82, 1]; // step start times within one bar: slow steps of 0.6 s, quick ones of 0.47 s
+    const bars = Math.floor(t / BAR), u = t / BAR - bars;
+    let i = 0; while (u >= STEPS[i + 1]) i++;
+    const k = (u - STEPS[i]) / (STEPS[i + 1] - STEPS[i]); // progress through this step
+    const side = (bars * 5 + i) % 2 ? 1 : -1;             // five steps a bar, so the bars alternate their lead foot
+    const e = Math.min(1, k / 0.85), shift = e * e * (3 - 2 * e); // the weight rolls across over most of the step, never snapping
+    return { sway: -side + 2 * side * shift, lift: Math.sin(Math.PI * k), side };
+  }
+  // sit: 0 standing, 1 sitting, 2 sitting and eating
+  function animate(ch, state, castP, bobberPos, time, dancing, swim, sit) {
+    const t = time + ch.phase;
+    const dance = !!dancing && state !== 'cast' && state !== 'fish' && state !== 'reel';
+    const swimming = !!swim && !dance;
+    const sitting = !!sit && !dance && !swimming && state === 'idle';
+    const eating = sitting && sit === 2;
+    ch.sitK = lerp(ch.sitK, sitting ? 1 : 0, 0.15); // eases down onto the ground and back up
+    const drop = ch.sitK * 0.47; // hips from standing height down to just above the ground
+    let legL = 0, legR = 0, armA = 0, bob = 0, sway = 0;
+    const cc = dance ? chacha(t) : null; // the cha-cha step this moment, also used while walking along
+    if (sitting) {
+      legL = -1.45; legR = -1.38; bob = Math.sin(t * 1.6) * 0.006; // legs out in front, a touch apart
+    } else if (swimming && (state === 'walk' || state === 'run' || state === 'idle')) {
+      // afloat: a flutter kick under the surface and a gentle bob; the arms paddle below
+      const f = state === 'idle' ? 2.2 : state === 'run' ? 7 : 5;
+      legL = Math.sin(t * f) * (state === 'idle' ? 0.18 : 0.4); legR = -legL;
+      bob = Math.sin(t * 1.8) * 0.04;
+    } else if (state === 'walk' || state === 'run') {
+      const f = state === 'run' ? 11 : 7.5;
+      legL = Math.sin(t * f) * (state === 'run' ? 0.9 : 0.6); legR = -legL;
+      armA = -legL * 0.8; bob = Math.abs(Math.cos(t * f)) * 0.05;
+    } else if (dance) {
+      bob = -0.07 * cc.lift;                                  // a knee dip on every step
+      if (cc.side > 0) { legR = -0.55 * cc.lift; legL = 0.1; } else { legL = -0.55 * cc.lift; legR = 0.1; } // the stepping foot lifts
+    } else { bob = Math.sin(t * 1.6) * 0.012; }
+    let tilt = 0, headTilt = 0, hipX = 0;
+    if (dance) { sway = cc.sway * 0.5; tilt = -cc.sway * 0.17; headTilt = cc.sway * 0.25; hipX = cc.sway * 0.12; }
+    ch.torso.position.x = lerp(ch.torso.position.x, hipX, 0.3);
+    // the stepping foot also kicks out sideways a little, as the baby's shuffle does
+    const kick = dance ? 0.3 * cc.lift : 0;
+    ch.legL.rotation.z = lerp(ch.legL.rotation.z, dance && cc.side < 0 ? -kick : 0, 0.4);
+    ch.legR.rotation.z = lerp(ch.legR.rotation.z, dance && cc.side > 0 ? kick : 0, 0.4);
+    ch.legL.rotation.x = lerp(ch.legL.rotation.x, legL, 0.4);
+    ch.legR.rotation.x = lerp(ch.legR.rotation.x, legR, 0.4);
+    ch.torso.position.y = 0.6 - drop + bob;
+    ch.legL.position.y = ch.legR.position.y = 0.6 - drop;
+    ch.torso.rotation.y = lerp(ch.torso.rotation.y, sway, 0.15);
+    ch.torso.rotation.z = lerp(ch.torso.rotation.z, tilt, 0.15);
+    ch.head.rotation.z = lerp(ch.head.rotation.z, headTilt, 0.15);
+    let armRX = armA, armRZ = 0, armLX = -armA, armLZ = 0, rodW = 0.3, torsoX = 0, headX = 0, headYaw = 0, elbowR = 0, elbowL = 0;
+    if (state === 'fish') { armRX = -1.15; armRZ = -0.15; armLX = -0.9; armLZ = 0.35; rodW = 1.0; headX = 0.25; }
+    else if (state === 'cast') {
+      const p = castP;
+      if (p < 0.4) { const q = p / 0.4; armRX = lerp(0, -2.6, q); rodW = lerp(0.3, -0.6, q); torsoX = lerp(0, -0.15, q); }
+      else { const q = Math.min(1, (p - 0.4) / 0.6 * 1.6); armRX = lerp(-2.6, -1.15, q); rodW = lerp(-0.6, 1.05, q); torsoX = lerp(-0.15, 0.08, q); }
+      armLX = -0.5; armLZ = 0.3;
+    } else if (state === 'reel') { armRX = -1.3; armLX = -1.1; armLZ = 0.45; rodW = 1.2 + Math.sin(t * 30) * 0.03; headX = 0.2; }
+    else if (dance) { // elbows bent, forearms forward, the two arms pumping in opposition with the sway
+      armRX = -0.4 - cc.sway * 0.75; armLX = -0.4 + cc.sway * 0.75; armRZ = -0.22; armLZ = 0.22;
+      elbowR = elbowL = -1.6; headX = -0.08 + 0.18 * cc.lift;
+    }
+    else if (eating) { // eating: both arms fold up, holding the skewered fish across the hands at the mouth; a bite now and then
+      const bite = Math.pow(Math.max(0, Math.sin(t * 2.4)), 2);          // the fish comes up and the head dips in to meet it
+      const chew = (1 - bite) * Math.sin(t * 14) * 0.05;                   // quick small nods while chewing
+      const roll = Math.sin(t * 1.3) * 0.06;                               // working along the fish like a corn cob
+      armRX = -1.05 - bite * 0.14 + roll; armLX = -1.05 - bite * 0.14 - roll; armRZ = -0.4; armLZ = 0.4;
+      elbowR = elbowL = -2.3 + bite * 0.14;
+      headX = 0.04 + bite * 0.3 + chew; headYaw = Math.sin(t * 1.3) * 0.2; torsoX = 0.1 + bite * 0.12;
+    }
+    else if (sitting) { // the meal is done: hands resting on the thighs, leaning back a touch, looking slowly around the lake
+      armRX = armLX = -0.3; armRZ = -0.08; armLZ = 0.08; elbowR = elbowL = -1.0;
+      torsoX = -0.06; headX = -0.06 + Math.sin(t * 0.5) * 0.04; headYaw = Math.sin(t * 0.35) * 0.4;
+    }
+    else if (swimming) { // treading water, or paddling along: the arms sweep forward and back out of phase, held a little out from the body
+      const f = state === 'idle' ? 2.2 : 4.5, a = state === 'idle' ? 0.25 : 0.55;
+      armRX = -0.7 + Math.sin(t * f) * a; armLX = -0.7 - Math.sin(t * f) * a; armRZ = -0.3; armLZ = 0.3; headX = -0.12;
+    }
+    ch.armR.rotation.x = lerp(ch.armR.rotation.x, armRX, 0.3); ch.armR.rotation.z = lerp(ch.armR.rotation.z, armRZ, 0.3);
+    ch.armL.rotation.x = lerp(ch.armL.rotation.x, armLX, 0.3); ch.armL.rotation.z = lerp(ch.armL.rotation.z, armLZ, 0.3);
+    ch.elbowR.rotation.x = lerp(ch.elbowR.rotation.x, elbowR, 0.3); ch.elbowL.rotation.x = lerp(ch.elbowL.rotation.x, elbowL, 0.3);
+    ch.rod.rotation.x = lerp(ch.rod.rotation.x, rodW - ch.armR.rotation.x, 0.3);
+    ch.rod.visible = !dance && !sitting;
+    ch.torso.rotation.x = lerp(ch.torso.rotation.x, torsoX, 0.2);
+    ch.head.rotation.x = lerp(ch.head.rotation.x, headX, 0.25);
+    ch.head.rotation.y = lerp(ch.head.rotation.y, headYaw, 0.2);
+    ch.snack.visible = eating && ch.sitK > 0.6;
+    if (ch.snack.visible) { // the fish spans from one hand to the other, wherever this frame put them
+      ch.torso.updateMatrixWorld(true);
+      const r = ch.torso.worldToLocal(ch.elbowR.localToWorld(tmpV.set(0, -0.27, 0)));
+      const l = ch.torso.worldToLocal(ch.elbowL.localToWorld(tmpV2.set(0, -0.27, 0)));
+      ch.snack.position.copy(r).add(l).multiplyScalar(0.5);
+      ch.snack.quaternion.setFromUnitVectors(xAxis, r.sub(l).normalize());
+    }
+    const lineOn = !!bobberPos && (state === 'fish' || state === 'reel' || state === 'cast');
+    ch.line.visible = lineOn; ch.bobber.visible = lineOn;
+    if (lineOn) {
+      ch.tip.getWorldPosition(tmpV);
+      ch.bobber.position.set(bobberPos.x, bobberPos.y, bobberPos.z);
+      const span = Math.hypot(bobberPos.x - tmpV.x, bobberPos.z - tmpV.z);
+      tmpV2.copy(tmpV).lerp(ch.bobber.position, 0.5); tmpV2.y -= 0.1 + span * 0.07; // sag
+      const pa = ch.line.geometry.attributes.position;
+      pa.setXYZ(0, tmpV.x, tmpV.y, tmpV.z); pa.setXYZ(1, tmpV2.x, tmpV2.y, tmpV2.z); pa.setXYZ(2, bobberPos.x, bobberPos.y + 0.08, bobberPos.z);
+      pa.needsUpdate = true;
+    }
+    if (ch.bubble.visible && performance.now() > ch.bubbleUntil) ch.bubble.visible = false;
+    else if (!ch.bubble.visible && performance.now() < ch.bubbleUntil) ch.bubble.visible = true;
+  }
+
+  // ---------------------------------------------------------------- fish table
+  const FISH = [
+    { n: 'Bluegill', w: [0.1, 0.5], p: 22, r: 'common' },
+    { n: 'Crucian carp', w: [0.3, 1.6], p: 18, r: 'common' },
+    { n: 'Yellow perch', w: [0.2, 1.2], p: 18, r: 'common' },
+    { n: 'Rainbow trout', w: [0.5, 3.2], p: 11, r: 'uncommon' },
+    { n: 'Largemouth bass', w: [0.8, 4.5], p: 10, r: 'uncommon' },
+    { n: 'Common carp', w: [1.5, 9.0], p: 8, r: 'uncommon' },
+    { n: 'Channel catfish', w: [2.0, 15.0], p: 4.5, r: 'rare' },
+    { n: 'Northern pike', w: [1.5, 11.0], p: 4, r: 'rare' },
+    { n: 'Golden koi', w: [2.0, 6.0], p: 1.2, r: 'epic' },
+    { n: 'Stillwater sturgeon', w: [12.0, 48.0], p: 0.5, r: 'legendary' },
+    { n: 'Old leather boot', w: [0.6, 0.9], p: 2.8, r: 'junk' }
+  ];
+  const FISH_TOTAL = FISH.reduce((s, f) => s + f.p, 0);
+  function rollFish() {
+    let x = Math.random() * FISH_TOTAL;
+    for (const f of FISH) { x -= f.p; if (x <= 0) { const wt = Math.round((f.w[0] + Math.pow(Math.random(), 2.2) * (f.w[1] - f.w[0])) * 100) / 100; return { n: f.n, wt, r: f.r }; } }
+    return { n: FISH[0].n, wt: 0.2, r: 'common' };
+  }
+
+  // ---------------------------------------------------------------- local player
+  const myId = Math.random().toString(36).slice(2, 10);
+  const savedName = cleanName(store('lake.name'));
+  const savedHue = parseFloat(store('lake.hue'));
+  let savedShirt = parseInt(store('lake.shirt'), 10);
+  if (!(savedShirt >= 0 && savedShirt < 8) && !isNaN(savedHue)) { const i = [0, 0.09, 0.3, 0.5, 0.62, 0.8].findIndex((h) => Math.abs(h - savedHue) < 0.005); if (i >= 0) savedShirt = i; } // a shirt picked on the older six-colour page
+  const savedFit = { p: pick(PANTS_COLORS, parseInt(store('lake.pants'), 10)), c: pick(CAP_COLORS, parseInt(store('lake.cap'), 10)), o: pick(SHOE_COLORS, parseInt(store('lake.shoes'), 10)), s: pick(SHIRT_COLORS, savedShirt) };
+  // the look seed picks skin, hair and cap colours; it is drawn once per device and kept, so you always look like yourself here
+  let look = parseInt(store('lake.look'), 10);
+  if (!Number.isInteger(look) || look < 0) { look = 2 + Math.floor(Math.random() * 99998); store('lake.look', String(look)); }
+  const me = {
+    name: savedName || ('Angler ' + Math.floor(100 + Math.random() * 900)),
+    hue: isNaN(savedHue) ? Math.random() : savedHue, look, fit: savedFit,
+    x: 2.2, z: LAKE_R + 9, yaw: Math.PI, y: 0,
+    state: 'idle',
+    fish: { phase: 'idle', t: 0, bobber: null, target: null, bites: 0, timer: 0, castFrom: null },
+    caught: 0, best: null,
+    inv: { wood: 0, rock: 0 }, bag: [], danceUntil: 0, dancing: false, sitting: false, eatUntil: 0, eating: false,
+    dances: Math.max(0, parseInt(store('lake.dances'), 10) || 0) // appreciation dances earned by eating grilled fish
+  };
+  try {
+    const t = JSON.parse(store('lake.tally') || 'null');
+    if (t && typeof t.caught === 'number') {
+      me.caught = t.caught; me.best = t.best || null;
+      if (t.inv) { me.inv.wood = Math.max(0, t.inv.wood | 0); me.inv.rock = Math.max(0, t.inv.rock | 0); }
+      if (Array.isArray(t.bag)) me.bag = t.bag.filter((f) => f && typeof f.n === 'string' && typeof f.wt === 'number').slice(0, 12);
+    }
+  } catch (e) { /* ignore */ }
+  const myFires = [];  // { i, x, z }
+  let myGrills = [];   // { i, x, z, n, wt, f }
+  const eatenIds = new Set();
+  const myChar = makeHuman(me.hue, me.look, me.fit);
+  setName(myChar, me.name);
+  myChar.g.position.set(me.x, groundY(me.x, me.z), me.z);
+  myChar.g.rotation.y = me.yaw;
+
+  $('who-name').textContent = me.name; $('cname').value = me.name; $('wname').value = me.name;
+  function applyName(v) {
+    v = cleanName(v); if (!v) return;
+    me.name = v; $('who-name').textContent = v; $('cname').value = v; $('wname').value = v; store('lake.name', v); setName(myChar, v); net.dirty = true;
+  }
+  $('wname').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); applyName(e.target.value); enterLake(); } e.stopPropagation(); });
+  $('wname-form').addEventListener('submit', (e) => { e.preventDefault(); applyName($('wname').value); $('wname').blur(); enterLake(); });
+  $('cname').addEventListener('change', (e) => applyName(e.target.value));
+  $('cname').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); applyName(e.target.value); e.target.blur(); } e.stopPropagation(); });
+  $('cname-form').addEventListener('submit', (e) => { e.preventDefault(); applyName($('cname').value); $('cname').blur(); dropFocus(); });
+
+  // ---------------------------------------------------------------- customization panel: name, shirt, pants, cap, shoes
+  const hex = (c) => '#' + c.toString(16).padStart(6, '0');
+  function swatches(el, colors, onPick) {
+    el.innerHTML = '';
+    return colors.map((c, i) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'swb'; b.style.background = typeof c === 'number' ? hex(c) : c;
+      b.setAttribute('aria-label', 'Colour ' + (i + 1)); tapify(b, () => { onPick(i); refreshCust(); }); el.appendChild(b); return b;
+    });
+  }
+  const swShirt = swatches($('sw-shirt'), SHIRT_COLORS, (i) => { me.hue = SHIRT_HUES[i]; me.fit = { ...me.fit, s: i }; myChar.hue = me.hue; setFit(myChar, me.fit); store('lake.shirt', String(i)); store('lake.hue', String(me.hue)); net.dirty = true; });
+  const swPants = swatches($('sw-pants'), PANTS_COLORS, (i) => { me.fit = { ...me.fit, p: i }; setFit(myChar, me.fit); store('lake.pants', String(i)); net.dirty = true; });
+  const swCap = swatches($('sw-cap'), CAP_COLORS, (i) => { me.fit = { ...me.fit, c: i }; setFit(myChar, me.fit); store('lake.cap', String(i)); net.dirty = true; });
+  const swShoe = swatches($('sw-shoe'), SHOE_COLORS, (i) => { me.fit = { ...me.fit, o: i }; setFit(myChar, me.fit); store('lake.shoes', String(i)); net.dirty = true; });
+  function refreshCust() {
+    swShirt.forEach((b, i) => b.classList.toggle('on', i === me.fit.s));
+    swPants.forEach((b, i) => b.classList.toggle('on', i === me.fit.p));
+    swCap.forEach((b, i) => b.classList.toggle('on', i === me.fit.c));
+    swShoe.forEach((b, i) => b.classList.toggle('on', i === me.fit.o));
+  }
+  function openCust(open) {
+    const panel = $('cust'); panel.hidden = !open; document.body.classList.toggle('cust', open); $('who').setAttribute('aria-expanded', String(open));
+    if (open) { $('cname').value = me.name; refreshCust(); }
+  }
+  tapify($('who'), () => openCust($('cust').hidden)); // the whole name box opens the panel, not only the shirt icon
+  // the name box matches the title card's height, and the two round buttons (shirt, bag) take their size from it
+  function layoutHud() {
+    const h = $('brand').offsetHeight; if (!h) return;
+    $('who').style.height = h + 'px';
+    const b = h - 12; // button diameter inside the box's 6px padding
+    const rs = document.documentElement.style;
+    rs.setProperty('--hb', b + 'px');
+    rs.setProperty('--hud2', (14 + h + 10) + 'px'); // second row: bag button, customization panel, desktop tally
+    rs.setProperty('--hud3', (14 + h + 10 + b + 8) + 'px'); // third row: the tally the bag button opens on phones
+  }
+  layoutHud();
+  if (window.ResizeObserver) new ResizeObserver(layoutHud).observe($('brand')); else addEventListener('resize', layoutHud);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutHud);
+  tapify($('cust-close'), () => openCust(false));
+  // a tap anywhere outside the panel (and outside the name box that toggles it) closes it; that tap does not also walk
+  let custClosedAt = 0;
+  const outsideCust = (e) => {
+    if ($('cust').hidden) return;
+    const t = e.target;
+    if ($('cust').contains(t) || $('who').contains(t)) return;
+    openCust(false); custClosedAt = performance.now();
+  };
+  addEventListener('pointerdown', outsideCust, true);
+  addEventListener('touchstart', outsideCust, { capture: true, passive: true });
+
+  function updateTally() {
+    $('t-count').textContent = String(me.caught);
+    $('t-best').textContent = me.best ? me.best.wt.toFixed(2) + ' kg ' + me.best.n : 'none yet';
+    $('t-fish').textContent = String(me.bag.length); $('t-wood').textContent = String(me.inv.wood); $('t-rock').textContent = String(me.inv.rock);
+    const n = me.bag.length + me.inv.wood + me.inv.rock; $('bag-n').textContent = String(n); $('bag-n').classList.toggle('show', n > 0);
+    store('lake.tally', JSON.stringify({ caught: me.caught, best: me.best, inv: me.inv, bag: me.bag }));
+  }
+  updateTally();
+
+  // ---------------------------------------------------------------- log + prompt + card
+  const logEl = $('log');
+  function log(html, cls) {
+    const d = document.createElement('div'); d.className = 'line ' + (cls || ''); d.innerHTML = html;
+    logEl.appendChild(d);
+    while (logEl.children.length > (isTouch ? 4 : 8)) logEl.removeChild(logEl.firstChild);
+  }
+  const promptEl = $('prompt');
+  let promptKey = '';
+  function setPrompt(html, cls) {
+    const key = html + '|' + (cls || '');
+    if (key === promptKey) return; promptKey = key;
+    if (!html) { promptEl.classList.add('hidden'); promptEl.classList.remove('bite'); return; }
+    promptEl.innerHTML = html; promptEl.classList.remove('hidden'); promptEl.classList.toggle('bite', cls === 'bite');
+  }
+  let cardTimer = 0;
+  function showCard(eyebrow, fish, wt, rarity) {
+    const c = $('card');
+    $('card-eyebrow').textContent = eyebrow; $('card-fish').textContent = fish; $('card-wt').textContent = wt;
+    c.className = 'glass show r-' + rarity;
+    clearTimeout(cardTimer); cardTimer = setTimeout(() => c.classList.remove('show'), 3600);
+  }
+
+  // ---------------------------------------------------------------- input
+  const keys = new Set();
+  // no typed chat: Enter (or the Kind word button) shares a small kindness with everyone at the lake
+  const KIND_WORDS = [
+    'You are doing better than you think.', 'Take a breath. The lake is in no hurry, and neither are you.',
+    'Whatever today was, you made it here. That counts.', 'It is okay to rest. Resting is not falling behind.',
+    'Someone is glad you exist. Probably more than one someone.', 'You do not have to catch anything to have had a good day.',
+    'Be as kind to yourself as you would be to a friend sitting next to you.', 'The hard part you are carrying is allowed to be heavy.',
+    'Small steps still move you forward.', 'You are not behind. You are on your own path.',
+    'Let your shoulders drop. You can pick things back up later.', 'There is still time for good things.',
+    'You have survived every bad day so far. That is a perfect record.', 'Notice the water for a minute. That is enough for now.',
+    'You are allowed to want more, and you are allowed to be content.', 'May your line be calm and your evening quiet.',
+    'Thank you for being here with the rest of us.', 'The sun will come up again tomorrow, and so will you.',
+    'Nothing about you needs fixing right now.', 'You made someone feel welcome today, even if you did not notice.',
+    'Go easy. The fish do not judge, and neither do we.', 'You are a good person having a hard time, not a hard person.',
+    'Nice cast. Nice you.', 'Still water, steady heart.', 'If you need a sign to slow down, this is it.',
+    'Your pace is a fine pace.', 'Good things gather around people who sit still long enough.', 'It is a good day to forgive yourself.',
+    'You belong here as much as the reeds and the stones.', 'The water does not rush, and it still gets where it is going.',
+    'Whatever you did not finish today will wait for a rested you.', 'You are more patient than you give yourself credit for.',
+    'Even the quiet days are building something.', 'Nobody at this lake needs you to be impressive.',
+    'A slow evening is not a wasted one.', 'You have made it through harder things than this week.',
+    'Put the worry down for a minute. It will keep.', 'Your kindness reaches further than you can see.',
+    'The best catch of the day might be a calm mind.', 'You are allowed to take up space on this dock.',
+    'Breathe out longer than you breathe in. Then once more.', 'You have grown in ways that do not show up in numbers.',
+    'The ripples settle. So will this.', 'Someone learned something good from you once.',
+    'Tired is not the same as failing.', 'You can start again tomorrow, or even in a minute.',
+    'Being gentle with yourself is not giving up.', 'The lake has seen a thousand sunsets and still enjoys this one.',
+    'You showed up. Most days, that is the whole trick.', 'Not every bite needs to be chased.',
+    'Your worth was never on the scale with the fish.', 'Rest is part of the work, not a break from it.',
+    'The far shore is still there, even in the fog.', 'You are easier to love than you think.',
+    'Let the small win be a win.', 'The quiet in you is strength, not absence.',
+    'Today you can be a beginner at something. That is a gift.', 'Thank yourself for one thing you did this week.',
+    'The light comes back. It always has.', 'You carry more than people know, and you carry it well.',
+    'You do not owe anyone a perfect version of yourself.', 'Drink some water. Sit up a little. You deserve comfort.',
+    'An ordinary day can still hold something lovely.', 'The mountains were not built in a hurry either.',
+    'If today was hard, you are allowed to say so.', 'You are enough company for yourself. Good company, even.',
+    'The fish are slow tonight, and that is perfectly fine.', 'May your worries drift out like a bobber and float.',
+    'Being here, quietly, is a kind of courage.', 'Someone would be glad to hear from you today.',
+    'The best ideas arrive when you stop chasing them.', 'A deep breath is a small act of repair.',
+    'Your mistakes taught you more than your wins did.', 'No one is grading your evening.',
+    'The sky is big enough for everything you are feeling.', 'You keep showing up for other people. Show up for yourself too.',
+    'What you do quietly still matters.', 'A hard season is not the whole year.',
+    'The water remembers nothing and welcomes everyone.', 'You are allowed to feel proud of small things.',
+    'You get to decide what today meant.', 'Even on the still days, you are moving.',
+    'The shore is right here whenever you need solid ground.', 'Somewhere, something you planted is growing.',
+    'You can be unfinished and still be whole.', 'Kind eyes on yourself. Just for a while.',
+    'There is nothing you need to prove to the lake.', 'A gentle pace gets you home too.',
+    'The people who matter already see the good in you.', 'You are not too much, and you are not too little.',
+    'Say something nice to yourself. Out loud if you like.', 'The campfire is warm and so is this company.',
+    'Doubt is loud. It is not usually right.', 'You have good instincts. Trust one of them today.',
+    'Every cast is practice, and practice counts.', 'You are a safe place for someone. Be one for yourself.',
+    'This quiet moment is yours. Nobody can take it.', 'The next good thing is closer than the last hard one.',
+    'A warm meal and an early night fix more than you would think.', 'Still here. Still going. That is plenty.',
+    'Believe in yourself the way I believe in you.',
+    'You are someone\'s reason to smile today.', 'The world is gentler for having you in it.',
+    'Your heart is in the right place. It always has been.', 'You are worth the time it takes to rest.',
+    'Wherever you are starting from is a fine place to start.', 'Someone remembers a kind thing you said long after you forgot it.',
+    'You have a way of making rooms warmer.', 'Today, let good enough be good enough.',
+    'You are loved in ways that do not need to be earned.', 'There is a seat by the fire with your name on it.',
+    'Your gentleness is not weakness. It is rare.', 'The person you are becoming is worth the wait.',
+    'You brought light here just by arriving.', 'What feels like a detour may be the road.',
+    'You have every right to be here.', 'May something small and lovely find you today.',
+    'You are not alone at this lake, and you are not alone out there.', 'Your laugh is somebody\'s favourite sound.',
+    'Keep your hopes. They look good on you.', 'You have softened more hard edges than you know.',
+    'A quiet heart hears more than a loud one.', 'You were kind when it was hard. That is who you are.',
+    'This moment asks nothing of you.', 'The water is calm, and you can be too.',
+    'You are allowed to be happy before everything is fixed.', 'Someone is better off because you listened once.',
+    'Hold on to the small joys. They add up.', 'You deserve the patience you give to everyone else.',
+    'You make difficult days easier for the people around you.', 'Nothing you feel right now is too much for this evening.',
+    'You are a whole person on your worst day too.', 'The fire does not ask who you were yesterday.',
+    'You can be tired and still be wonderful.', 'Your presence is a present. Thank you for it.',
+    'Let yourself be looked after for a while.', 'There is more good ahead of you than behind you.',
+    'You handled today. That deserves a nod.', 'Even a short rest counts as rest.',
+    'You are easier to forgive than you believe.', 'Your story is still being written, and it is a good one.',
+    'You notice things other people miss. That is a gift.', 'Wherever you go next, go kindly, starting with yourself.',
+    'The lake is glad you came by.', 'You are a good friend, including to the people you forget to count.',
+    'May your worries be light and your boots be dry.', 'You give more than you take, and it shows.',
+    'Let the evening hold you up for a bit.', 'You can let one thing go tonight.',
+    'Your best is allowed to look different every day.', 'You are someone\'s safe harbour.',
+    'The gentlest people are often the strongest ones.', 'It is brave to keep caring. Thank you for that.',
+    'You have made it further than the you of last year hoped.', 'You do not need permission to rest, but here it is anyway.',
+    'You are a good thing that happened to this world.', 'Someone is proud of you, even if they have not said it lately.',
+    'Your soft heart has carried you a long way.', 'The stars come out whether or not the day went well.',
+    'You are allowed to enjoy this without earning it first.', 'The way you keep trying is quietly heroic.',
+    'A little grace for yourself tonight. You have earned that much.', 'You have good things coming. Leave the door open.',
+    'This lake has room for every version of you.', 'The kindness you give comes back in ways you will not see coming.',
+    'Breathe. You are safe here for now.', 'You are not a burden. You are a person, and people need people.',
+    'The hard day did not undo the good you have done.', 'Thank you for staying gentle in a rough world.',
+    'You can be a work in progress and a masterpiece at once.', 'Let today be simple.',
+    'Your presence makes the fire feel warmer.', 'A good heart is the best thing to bring anywhere, and you brought one.',
+    'You are allowed to change your mind and your pace.', 'Someone would miss you if you were not here. Several someones.',
+    'You are gentler with others than you are with yourself. Try switching for an hour.', 'You are more than the thing you are worried about.',
+    'Nothing good about you is going anywhere.', 'May your evening be as soft as the light on the water.',
+    'Trust the slow days. They are doing quiet work.', 'The little things you get right every day are not little.',
+    'You are a good listener, a good friend, and good company.', 'There is still wonder left for you.',
+    'You carry light even when you cannot feel it.', 'Be here a moment. That is enough of a plan.',
+    'You have been brave more times than you have been given credit for.', 'The lake does not keep score, and neither should you tonight.',
+    'You are welcome back any time, exactly as you are.', 'Your tenderness is a strength the world needs more of.',
+    'One good evening can turn a week around. Let this be it.', 'You matter here, and you matter out there.',
+    'Lean back. Let your eyes rest on the water.', 'Somebody somewhere is grateful you were born.',
+    'Your heart is doing fine. Let it be.', 'Whatever happens next, you will meet it with the same good heart.',
+    'You showed kindness today. That is the whole point.', 'Go gently into the rest of your day.',
+    'You are a calm place for someone else\'s storm.', 'Let the campfire keep you company for a while.',
+    'You deserve good news, and some is on its way.', 'You are loved. Full stop.'
+  ];
+  let lastKind = 0;
+  function sayKindWord() {
+    if (!entered) return;
+    const now = performance.now(); if (now - lastKind < 1500) return; lastKind = now;
+    const text = KIND_WORDS[Math.floor(Math.random() * KIND_WORDS.length)];
+    say(myChar, text); net.event({ k: 'say', t: text }); // shown only as a bubble over the head, never in the log
+  }
+  tapify($('kindbtn'), sayKindWord);
+  tapify($('bagbtn'), () => { const open = $('tally').classList.toggle('open'); $('bagbtn').setAttribute('aria-expanded', String(open)); });
+
+  addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (!$('photo').hidden || !$('leave').hidden) { if (e.code === 'Escape') { closePhoto(); closeLeave(); } return; } // a sheet is up: the lake waits
+    if (!entered) return;
+    if (e.code === 'Enter') { e.preventDefault(); if (!e.repeat) sayKindWord(); return; }
+    if (e.code === 'Space' || e.code === 'KeyF') { e.preventDefault(); if (!e.repeat) action(); return; }
+    if (e.code === 'KeyP') { if (!e.repeat) takePhoto(); return; }
+    if (e.code === 'KeyE' || e.code === 'KeyB' || e.code === 'KeyG' || e.code === 'KeyT') { if (!e.repeat) runAction(e.code.slice(3)); return; }
+    keys.add(e.code);
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  });
+  addEventListener('keyup', (e) => keys.delete(e.code));
+  addEventListener('blur', () => keys.clear());
+
+  // camera: always behind the character, looking the way they face
+  const cam = { yaw: Math.PI, pitch: 0.42, dist: 7.5, orbit: 0, pitchBase: 0.42, held: false };
+  let moveTarget = null;
+  const marker = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.34, 32), new THREE.MeshBasicMaterial({ color: 0xf2b35a, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }));
+  marker.rotation.x = -Math.PI / 2; marker.visible = false; marker.renderOrder = 5; scene.add(marker);
+  const raycaster = new THREE.Raycaster(); const ndc = new THREE.Vector2();
+  const tapTargets = [...terrainTiles, water, dockGroup]; // neighbouring tiles included, so a tap past the edge still sets a target
+  function tapAt(cx, cy) {
+    if (!entered) return;
+    ndc.set((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(tapTargets);
+    if (!hits.length) return;
+    const tx = hits[0].point.x, tz = hits[0].point.z;
+    moveTarget = { x: tx, z: tz };
+    marker.position.set(tx, Math.max(groundY(tx, tz), 0) + 0.05, tz); marker.visible = true; // over the lake the ring floats on the surface
+  }
+  function clearTarget() { moveTarget = null; marker.visible = false; }
+
+  // one pointer: drag turns (swipe on touch), a short tap walks there; two pointers pinch to zoom
+  // Gesture core, fed by raw touch events on phones (so the page can claim the gesture with preventDefault
+  // before an in-app browser such as Threads or Instagram grabs it) and by pointer events on desktop.
+  const pointers = new Map();
+  let gesture = null, pinchDist = 0;
+  const lookSpeed = isTouch ? 0.0075 : 0.005;
+  function dropFocus() { const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); } // the canvas swallows the default focus change, so put the keyboard away explicitly
+  function gDown(id, x, y) {
+    dropFocus();
+    pointers.set(id, { x, y });
+    if (pointers.size === 1) gesture = { id, x0: x, y0: y, lx: x, ly: y, t0: performance.now(), moved: 0 };
+    else { gesture = null; const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x - b.x, a.y - b.y); }
+    canvas.classList.add('dragging');
+  }
+  function gMove(id, x, y) {
+    const p = pointers.get(id); if (!p) return;
+    p.x = x; p.y = y;
+    if (pointers.size >= 2) {
+      const [a, b] = [...pointers.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0 && d > 0) cam.dist = clamp(cam.dist * (pinchDist / d), 3.2, 16);
+      pinchDist = d; return;
+    }
+    if (!gesture || gesture.id !== id) return;
+    const dx = x - gesture.lx, dy = y - gesture.ly; gesture.lx = x; gesture.ly = y;
+    gesture.moved += Math.abs(dx) + Math.abs(dy);
+    if (gesture.moved > 6) {
+      // the swipe steers the view; the character keeps walking where they were going and turns to match once they stop
+      cam.orbit -= dx * lookSpeed; cam.held = true;
+      cam.pitch = clamp(cam.pitch + dy * lookSpeed * 0.8, 0.08, 1.25);
+    }
+  }
+  function gUp(id, cancelled) {
+    pointers.delete(id);
+    if (gesture && gesture.id === id) {
+      // a gesture the browser cancelled is never a tap
+      if (!cancelled && gesture.moved < 10 && performance.now() - gesture.t0 < 500 && performance.now() - custClosedAt > 700) tapAt(gesture.x0, gesture.y0);
+      gesture = null;
+    }
+    if (pointers.size === 0) { canvas.classList.remove('dragging'); cam.held = false; }
+  }
+  if (isTouch) {
+    // the game's touch handling only switches on once the player has entered; before that the page behaves like any web page
+    canvas.addEventListener('touchstart', (e) => { if (!entered) return; e.preventDefault(); for (const t of e.changedTouches) gDown(t.identifier, t.clientX, t.clientY); }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => { if (!entered) return; e.preventDefault(); for (const t of e.changedTouches) gMove(t.identifier, t.clientX, t.clientY); }, { passive: false });
+    canvas.addEventListener('touchend', (e) => { if (!entered) return; e.preventDefault(); for (const t of e.changedTouches) gUp(t.identifier, false); }, { passive: false });
+    canvas.addEventListener('touchcancel', (e) => { if (!entered) return; for (const t of e.changedTouches) gUp(t.identifier, true); });
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!entered || e.pointerType === 'touch') return; // touches are handled above
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    gDown(e.pointerId, e.clientX, e.clientY);
+  });
+  canvas.addEventListener('pointermove', (e) => { if (e.pointerType !== 'touch') gMove(e.pointerId, e.clientX, e.clientY); });
+  canvas.addEventListener('pointerup', (e) => { if (e.pointerType !== 'touch') gUp(e.pointerId, false); });
+  canvas.addEventListener('pointercancel', (e) => { if (e.pointerType !== 'touch') gUp(e.pointerId, true); });
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.dist = clamp(cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.2, 16); }, { passive: false });
+  // One tap = one action, on every kind of browser. Measured inside Threads' Android browser: a tap on the dialog
+  // delivers pointerdown, touchstart, pointerup, touchend to the right element, so controls fire on the release
+  // (touchend carries user activation, which clipboard writes and browser hand-offs need; touchstart does not).
+  // A touch the host cancels without movement still counts as a tap. A click that follows a touch that already
+  // fired is the same tap and is dropped; a lone click (mouse, keyboard) fires on its own.
+  function tapify(el, fn) {
+    let last = 0;
+    const fire = () => { if (Date.now() - last < 700) return; last = Date.now(); dropFocus(); fn(); };
+    if (isTouch) {
+      let sx = 0, sy = 0, moved = false;
+      el.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; moved = false; }, { passive: true });
+      el.addEventListener('touchmove', (e) => { const t = e.changedTouches[0]; if (Math.hypot(t.clientX - sx, t.clientY - sy) > 12) moved = true; }, { passive: true });
+      el.addEventListener('touchend', (e) => { if (moved) return; if (e.cancelable) e.preventDefault(); fire(); }, { passive: false });
+      el.addEventListener('touchcancel', () => { if (!moved) fire(); });
+    }
+    el.addEventListener('click', (e) => { if (Date.now() - last < 700) { e.preventDefault(); return; } fire(); });
+  }
+  tapify($('castbtn'), () => { if (entered) action(); });
+
+  // ---------------------------------------------------------------- fishing state machine
+  const F = me.fish;
+  function canFish() { return nearWater(me.x, me.z); }
+  function action() {
+    if (F.phase === 'idle') {
+      if (!canFish()) { setPrompt('Walk closer to the water to cast'); setTimeout(() => { promptKey = ''; }, 1200); return; }
+      const toC = Math.hypot(me.x, me.z);
+      let dirx, dirz, reach;
+      if (onWater(me.x, me.z) || toC < 3) { dirx = Math.sin(me.yaw); dirz = Math.cos(me.yaw); reach = 6; } // out on the water: cast the way you face
+      else { dirx = -me.x / toC; dirz = -me.z / toC; reach = clamp(toC - 3, 4, 10); }
+      F.target = { x: me.x + dirx * reach, z: me.z + dirz * reach };
+      me.yaw = Math.atan2(dirx, dirz); clearTarget(); me.danceUntil = 0; standUp();
+      F.phase = 'cast'; F.t = 0; F.bites = 0; F.bobber = null;
+      F.castFrom = { x: me.x, z: me.z };
+    } else if (F.phase === 'wait') { endFishing(); }
+    else if (F.phase === 'bite') { landFish(); }
+  }
+  function endFishing() {
+    F.phase = 'reel'; F.t = 0;
+  }
+  function landFish() {
+    const f = rollFish();
+    if (f.r === 'junk') { showCard('You reeled in', f.n, 'Someone\'s been missing this', 'common'); log('<span class="n">' + esc(me.name) + '</span> reeled in an old boot.', 'sys'); }
+    else {
+      me.caught++;
+      if (!me.best || f.wt > me.best.wt) me.best = { n: f.n, wt: f.wt };
+      me.bag.push({ n: f.n, wt: f.wt, r: f.r }); if (me.bag.length > 12) me.bag.shift();
+      updateTally();
+      const label = { common: 'You caught', uncommon: 'Nice one', rare: 'A rare catch', epic: 'Incredible', legendary: 'Legend of the lake' }[f.r];
+      showCard(label, f.n, f.wt.toFixed(2) + ' kg', f.r);
+      log('<span class="n">' + esc(me.name) + '</span> caught a ' + f.wt.toFixed(2) + ' kg ' + esc(f.n), 'catch');
+      net.event({ k: 'catch', n: f.n, wt: f.wt, r: f.r });
+    }
+    if (F.bobber) ripple(F.bobber.x, F.bobber.z);
+    endFishing();
+  }
+  function fishingTick(dt) {
+    if (F.phase === 'idle') return;
+    F.t += dt;
+    // walking away cancels
+    if (F.castFrom && Math.hypot(me.x - F.castFrom.x, me.z - F.castFrom.z) > 0.6 && F.phase !== 'reel') { F.phase = 'idle'; F.bobber = null; return; }
+    if (F.phase === 'cast') {
+      if (F.t > 0.55 && !F.bobber) { // bobber leaves the rod tip
+        myChar.tip.getWorldPosition(tmpV);
+        F.bobber = { x: tmpV.x, y: tmpV.y, z: tmpV.z, flight: 0, from: { x: tmpV.x, y: tmpV.y, z: tmpV.z } };
+      }
+      if (F.bobber) {
+        F.bobber.flight += dt / 0.85;
+        const p = Math.min(1, F.bobber.flight);
+        F.bobber.x = lerp(F.bobber.from.x, F.target.x, p); F.bobber.z = lerp(F.bobber.from.z, F.target.z, p);
+        F.bobber.y = lerp(F.bobber.from.y, 0.02, p) + Math.sin(p * Math.PI) * 2.2;
+        if (p >= 1) { F.phase = 'wait'; F.t = 0; F.timer = rand(4, 13); ripple(F.bobber.x, F.bobber.z); }
+      }
+    } else if (F.phase === 'wait') {
+      F.bobber.y = 0.02 + Math.sin(F.t * 2.1) * 0.03;
+      F.timer -= dt;
+      if (F.timer <= 0) { F.phase = 'bite'; F.t = 0; ripple(F.bobber.x, F.bobber.z); }
+    } else if (F.phase === 'bite') {
+      F.bobber.y = -0.22 + Math.sin(F.t * 18) * 0.08;
+      if (F.t > 1.35) { F.bites++; F.phase = 'wait'; F.t = 0; F.timer = rand(3, 9); if (F.bites >= 3) { setPrompt('It got away. Reel in and try again.'); } }
+    } else if (F.phase === 'reel') {
+      if (F.bobber) {
+        myChar.tip.getWorldPosition(tmpV);
+        F.bobber.x = lerp(F.bobber.x, tmpV.x, dt * 3.5); F.bobber.z = lerp(F.bobber.z, tmpV.z, dt * 3.5); F.bobber.y = lerp(F.bobber.y, tmpV.y - 0.4, dt * 3.5);
+      }
+      if (F.t > 0.9) { F.phase = 'idle'; F.bobber = null; }
+    }
+  }
+  function fishingPrompt() {
+    const k = isTouch ? '<kbd>Cast</kbd>' : '<kbd>Space</kbd>';
+    if (F.phase === 'bite') setPrompt('Bite! ' + (isTouch ? 'Tap <kbd>Cast</kbd>' : 'Press <kbd>Space</kbd>') + ' to reel', 'bite');
+    else if (F.phase === 'wait') setPrompt(F.bites >= 3 ? 'No luck here. ' + k + ' to reel in' : 'Waiting for a bite. ' + k + ' reels in');
+    else if (F.phase === 'cast' || F.phase === 'reel') setPrompt('');
+    else if (me.eating) setPrompt('');
+    else if (!me.bag.length && nearestFire(me.x, me.z, GRILL_REACH) && !actions.length) setPrompt('No fish to cook yet. Go catch one.');
+    else if (canFish()) setPrompt(k + ' to cast a line');
+    else if ((me.inv.wood || me.inv.rock) && hintForFire() && !actions.length) setPrompt(hintForFire());
+    else if (promptKey.indexOf('closer') < 0) setPrompt('');
+  }
+
+  // ---------------------------------------------------------------- camp life: gather, build, grill, eat, dance
+  const newId = () => myId.slice(0, 3) + Math.random().toString(36).slice(2, 7);
+  function takePickup(p) {
+    if (p.taken) return;
+    p.taken = performance.now(); p.mesh.visible = false;
+    me.inv[p.type]++; updateTally();
+    log(p.type === 'wood' ? 'Picked up a branch.' : 'Picked up a stone.', 'sys');
+  }
+  // a campfire can go anywhere on land, snowy peaks included; never in the lake, on the dock, or on top of another fire
+  function firePlacement() {
+    const fx = wrapCoord(me.x + Math.sin(me.yaw) * 1.4), fz = wrapCoord(me.z + Math.cos(me.yaw) * 1.4);
+    if (onDock(fx, fz) || onDock(me.x, me.z) || onWater(me.x, me.z)) return null;
+    if (Math.hypot(fx, fz) < LAKE_R + 2.4 || terrainH(fx, fz) < 0.1) return null; // the water's edge reaches LAKE_R + 2.2
+    if (nearestFire(me.x, me.z, 1.3) || nearestFire(fx, fz, 4.5)) return null; // not while standing in a fire ring, nor too close to one
+    return { x: fx, z: fz };
+  }
+  function dropMyFire(id) {
+    removeFire(id);
+    myGrills = myGrills.filter((g) => g.f !== id);
+  }
+  function buildFire() {
+    const spot = firePlacement();
+    if (!spot || me.inv.wood < 3 || me.inv.rock < 2) return;
+    me.inv.wood -= 3; me.inv.rock -= 2; updateTally();
+    const id = newId();
+    myFires.push({ i: id, x: Math.round(spot.x * 100) / 100, z: Math.round(spot.z * 100) / 100 });
+    while (myFires.length > 3) { const old = myFires.shift(); dropMyFire(old.i); }
+    makeFire(id, spot.x, spot.z, 'me');
+    log('<span class="n">' + esc(me.name) + '</span> lit a campfire', 'sys');
+    net.event({ k: 'fire' }); net.dirty = true;
+  }
+  function grillFish() {
+    const fire = nearestFire(me.x, me.z, GRILL_REACH); // the same fire the Grill button was offered for
+    if (!fire || !me.bag.length) return;
+    if (F.phase !== 'idle') { F.phase = 'idle'; F.bobber = null; } // grilling reels the line in
+    const fish = me.bag.shift(); updateTally();
+    const id = newId(); const slot = grillSlot(fire, id);
+    myGrills.push({ i: id, x: Math.round(slot.x * 100) / 100, z: Math.round(slot.z * 100) / 100, n: fish.n, wt: fish.wt, f: fire.id });
+    while (myGrills.length > 6) { const old = myGrills.shift(); removeGrill(old.i); }
+    makeGrill(id, slot.x, slot.z, fish.n, fish.wt, 'me', me.name, fire.id);
+    log('<span class="n">' + esc(me.name) + '</span> put a ' + esc(fish.n) + ' on the grill. Anyone may eat it.', 'sys');
+    net.event({ k: 'grill', n: fish.n }); net.dirty = true;
+  }
+  // eating: sit down on the spot and eat for a few seconds, then stay sitting until walking off (or casting, or dancing).
+  // Every grilled fish eaten banks one appreciation dance, to be danced whenever the player likes (kept across visits).
+  function standUp() { if (me.sitting) net.dirty = true; me.sitting = false; me.eating = false; me.eatUntil = 0; }
+  function startDance() { standUp(); me.danceUntil = performance.now() + 12000; net.dirty = true; }
+  function doAppreciationDance() {
+    if (me.dances < 1) return;
+    me.dances--; store('lake.dances', String(me.dances));
+    startDance();
+    log('<span class="n">' + esc(me.name) + '</span> does an appreciation dance', 'sys');
+    net.event({ k: 'thanks' });
+  }
+  function eatGrill(gr) {
+    removeGrill(gr.id); eatenIds.add(gr.id);
+    me.danceUntil = 0; me.sitting = true; me.eatUntil = performance.now() + 7000; clearTarget();
+    me.dances++; store('lake.dances', String(me.dances));
+    if (gr.owner === 'me') {
+      myGrills = myGrills.filter((g) => g.i !== gr.id);
+      log('You sat down to eat your own ' + esc(gr.fish) + '. One appreciation dance saved.', 'sys');
+    } else {
+      log('You sat down to eat <span class="n">' + esc(gr.ownerName) + '</span>\'s ' + esc(gr.fish) + '. One appreciation dance saved for later.', 'sys');
+      net.event({ k: 'eat', g: gr.id, n: gr.fish });
+    }
+    net.dirty = true;
+  }
+  let actions = [];
+  const actsEl = $('acts'); let actsSig = '';
+  function computeActions() {
+    const a = [];
+    // while a line is out and waiting, the camp actions stay available (grilling reels the line in)
+    if (!entered || (F.phase !== 'idle' && F.phase !== 'wait')) return a;
+    const pk = nearestPickup(me.x, me.z, 1.8);
+    const gr = nearestGrill(me.x, me.z, 2.4);
+    if (pk) a.push({ key: 'E', label: pk.type === 'wood' ? 'Pick up branch' : 'Pick up stone', run: () => takePickup(pk) });
+    else if (gr && !me.eating) a.push({ key: 'E', label: 'Eat ' + gr.fish + (gr.owner === 'me' ? '' : ' (' + gr.ownerName + '\'s)'), run: () => eatGrill(gr) });
+    if (me.bag.length && nearestFire(me.x, me.z, GRILL_REACH)) a.push({ key: 'G', label: 'Grill ' + me.bag[0].n, run: grillFish });
+    if (me.inv.wood >= 3 && me.inv.rock >= 2 && firePlacement()) a.push({ key: 'B', label: 'Build campfire', run: buildFire });
+    if (me.dances > 0 && !me.dancing) a.push({ key: 'T', label: 'Appreciation dance ×' + me.dances, run: doAppreciationDance });
+    return a;
+  }
+  function runAction(key) { const a = actions.find((x) => x.key === key); if (a) a.run(); }
+  function renderActions() {
+    const sig = actions.map((a) => a.key + a.label).join('|');
+    if (sig === actsSig) return; actsSig = sig;
+    actsEl.innerHTML = '';
+    for (const a of actions) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'act';
+      b.innerHTML = esc(a.label) + (isTouch ? '' : ' <kbd>' + a.key + '</kbd>');
+      tapify(b, () => runAction(a.key));
+      actsEl.appendChild(b);
+    }
+  }
+  function hintForFire() {
+    if (me.inv.wood >= 3 && me.inv.rock >= 2) return '';
+    return 'Campfire needs 3 branches and 2 stones';
+  }
+
+  // ---------------------------------------------------------------- peers
+  const peers = new Map(); // id -> {ch, state..., last}
+  function peerFor(id, look) {
+    let p = peers.get(id);
+    if (!p) {
+      p = { ch: makeHuman(0.5, Number.isInteger(look) ? look : strHash(id)), uid: null, x: 0, z: 0, yaw: 0, tx: 0, tz: 0, tyaw: 0, state: 'idle', bobber: null, last: performance.now(), seen: new Set(), fireIds: new Set(), grillIds: new Set(), name: '', first: true };
+      peers.set(id, p); updateCount();
+    }
+    return p;
+  }
+  function applyPeer(id, d, uid) {
+    if (!d || typeof d !== 'object' || id === myId) return;
+    const p = peerFor(id, typeof d.k === 'number' && isFinite(d.k) ? Math.abs(Math.floor(d.k)) % 100000 : undefined);
+    const fresh = p.first;
+    p.last = performance.now();
+    if (uid) p.uid = uid;
+    const x = +d.x, z = +d.z, yaw = +d.r;
+    if (isFinite(x) && isFinite(z)) {
+      const ntx = clamp(x, -WORLD_R, WORLD_R), ntz = clamp(z, -WORLD_R, WORLD_R);
+      if (!p.first && (Math.abs(ntx - p.tx) > HALF || Math.abs(ntz - p.tz) > HALF)) { p.x += ntx - p.tx; p.z += ntz - p.tz; }
+      p.tx = ntx; p.tz = ntz;
+      if (p.first) { p.x = p.tx; p.z = p.tz; p.ch.g.position.set(p.x, groundY(p.x, p.z), p.z); p.first = false; }
+    }
+    if (isFinite(yaw)) p.tyaw = yaw;
+    if (typeof d.h === 'number' && isFinite(d.h)) { const hh = clamp(d.h, 0, 1); if (hh !== p.ch.hue) setShirt(p.ch, hh); }
+    if (Array.isArray(d.q)) setFit(p.ch, { p: d.q[0], c: d.q[1], o: d.q[2], s: d.q[3] }); // their chosen pants, cap, shoes and shirt; -1 (or missing) means their own default
+    const nm = cleanName(d.n) || 'Angler';
+    if (nm !== p.name) { p.name = nm; setName(p.ch, nm); } // arrivals and renames are not logged; the head count in the corner says who is here
+    p.state = ['idle', 'walk', 'run', 'cast', 'fish', 'reel'].includes(d.s) ? d.s : 'idle';
+    p.dance = d.d === 1;
+    p.sit = d.e === 1 ? (d.m === 1 ? 2 : 1) : 0; // 2 = eating, 1 = sitting after the meal
+    if (Array.isArray(d.b) && d.b.length >= 3 && d.b.every((v) => typeof v === 'number' && isFinite(v))) p.bobber = { x: clamp(d.b[0], -60, 60), y: clamp(d.b[1], -1, 6), z: clamp(d.b[2], -60, 60) }; else p.bobber = null;
+    // their campfires and grills: owner-authoritative lists, reconciled each update
+    const okId = (v) => typeof v === 'string' && /^[a-z0-9]{4,16}$/.test(v);
+    const num = (v, lim) => typeof v === 'number' && isFinite(v) && Math.abs(v) <= lim;
+    const fl = Array.isArray(d.f) ? d.f.slice(0, 3) : [];
+    const fIds = new Set();
+    for (const e of fl) {
+      if (!Array.isArray(e) || !okId(e[0]) || !num(e[1], WORLD_R) || !num(e[2], WORLD_R)) continue;
+      fIds.add(e[0]);
+      if (!fires.has(e[0])) makeFire(e[0], e[1], e[2], id);
+    }
+    for (const fid of p.fireIds) if (!fIds.has(fid)) removeFire(fid);
+    p.fireIds = fIds;
+    const gl = Array.isArray(d.g) ? d.g.slice(0, 6) : [];
+    const gIds = new Set();
+    for (const e of gl) {
+      if (!Array.isArray(e) || !okId(e[0]) || !num(e[1], WORLD_R) || !num(e[2], WORLD_R) || typeof e[3] !== 'string' || !num(e[4], 1000)) continue;
+      if (eatenIds.has(e[0])) continue;
+      gIds.add(e[0]);
+      if (!grills.has(e[0])) makeGrill(e[0], e[1], e[2], cleanText(e[3], 40) || 'fish', e[4], id, p.name, okId(e[5]) || e[5] === 'camp' ? e[5] : 'camp');
+    }
+    for (const gid of p.grillIds) if (!gIds.has(gid)) removeGrill(gid);
+    p.grillIds = gIds;
+    // one-shot events, each handled once
+    const evs = Array.isArray(d.ev) ? d.ev.slice(-8) : [];
+    for (const ev of evs) {
+      if (!ev || typeof ev !== 'object' || typeof ev.i !== 'string' || p.seen.has(ev.i)) continue;
+      p.seen.add(ev.i); if (p.seen.size > 400) p.seen.clear();
+      if (fresh && (typeof ev.at !== 'number' || Date.now() - ev.at > 20000)) continue; // do not replay history on arrival
+      handleEvent(p, ev);
+    }
+  }
+  function handleEvent(p, ev) {
+    const who = '<span class="n">' + esc(p.name) + '</span>';
+    if (ev.k === 'say' && typeof ev.t === 'string') {
+      const txt = cleanText(ev.t, 120);
+      if (txt) say(p.ch, txt);
+    } else if (ev.k === 'catch' && typeof ev.n === 'string' && typeof ev.wt === 'number') {
+      log(who + ' caught a ' + (+ev.wt).toFixed(2) + ' kg ' + esc(ev.n.slice(0, 40)), 'catch');
+      if (p.bobber) ripple(p.bobber.x, p.bobber.z);
+    } else if (ev.k === 'fire') {
+      log(who + ' lit a campfire', 'sys');
+    } else if (ev.k === 'grill' && typeof ev.n === 'string') {
+      log(who + ' put a ' + esc(ev.n.slice(0, 40)) + ' on the grill. Anyone may eat it.', 'sys');
+    } else if (ev.k === 'eat' && typeof ev.g === 'string') {
+      const mine = myGrills.find((g) => g.i === ev.g);
+      if (mine) {
+        myGrills = myGrills.filter((g) => g.i !== ev.g); removeGrill(ev.g); net.dirty = true;
+        showCard('Appreciation', p.name + ' loved your ' + mine.n, 'They sat down to eat it', 'uncommon');
+        log(who + ' sat down to eat your ' + esc(mine.n), 'catch');
+      } else {
+        const gr = grills.get(ev.g);
+        if (gr) { log(who + ' ate ' + esc(gr.ownerName) + '\'s ' + esc(gr.fish), 'sys'); removeGrill(ev.g); eatenIds.add(ev.g); }
+      }
+    } else if (ev.k === 'thanks') {
+      log(who + ' does an appreciation dance', 'sys');
+    }
+  }
+  function removePeer(id) {
+    const p = peers.get(id); if (!p) return;
+    scene.remove(p.ch.g); scene.remove(p.ch.line); scene.remove(p.ch.bobber);
+    for (const fid of p.fireIds) removeFire(fid);
+    for (const gid of p.grillIds) removeGrill(gid);
+    peers.delete(id); updateCount();
+  }
+  function removePeersByUid(uid) { for (const [id, p] of peers) if (p.uid === uid) removePeer(id); }
+  function updateCount() {
+    const n = peers.size + 1;
+    $('count').textContent = net.mode === 'solo' ? '' : '· ' + n + (n === 1 ? ' at the lake' : ' at the lake');
+  }
+
+  // ---------------------------------------------------------------- networking
+  const net = {
+    mode: 'connecting', transport: null, dirty: true, lastSend: 0, lastFull: 0, events: [], sendFn: null, leaveFn: null,
+    status(mode, label) {
+      this.mode = mode; const dot = $('netdot'); dot.className = 'dot ' + (mode === 'live' ? 'live' : mode === 'solo' ? 'solo' : 'wait');
+      $('netlabel').textContent = label; updateCount();
+    },
+    snapshot() {
+      const d = { n: me.name, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, r: Math.round(me.yaw * 100) / 100, h: Math.round(me.hue * 1000) / 1000, k: me.look, s: me.state, q: [me.fit.p, me.fit.c, me.fit.o, me.fit.s] };
+      if (me.dancing) d.d = 1;
+      if (me.sitting) d.e = 1; // sitting on the ground
+      if (me.eating) d.m = 1;  // and still eating
+      if (F.bobber) d.b = [Math.round(F.bobber.x * 100) / 100, Math.round(F.bobber.y * 100) / 100, Math.round(F.bobber.z * 100) / 100];
+      if (myFires.length) d.f = myFires.map((f) => [f.i, f.x, f.z]);
+      if (myGrills.length) d.g = myGrills.map((g) => [g.i, g.x, g.z, g.n, g.wt, g.f]);
+      if (this.events.length) d.ev = this.events;
+      return d;
+    },
+    event(ev) {
+      this.events.push(Object.assign({ i: newId(), at: Date.now() }, ev));
+      if (this.events.length > 8) this.events.shift();
+      this.dirty = true;
+    },
+    tick(now, moving) {
+      if (!this.sendFn || !entered) return;
+      const interval = moving || F.phase === 'cast' || F.phase === 'reel' ? 120 : 400;
+      if (this.dirty || now - this.lastSend > interval || now - this.lastFull > 2500) {
+        this.lastSend = now; if (now - this.lastFull > 2500) this.lastFull = now;
+        this.dirty = false;
+        try { const r = this.sendFn(this.snapshot()); if (r && r.catch) r.catch(() => {}); } catch (e) { /* dropped */ }
+      }
+    }
+  };
+
+  // Transport A: Skapi realtime group (anonymous session, no signup). Used when the page is hosted on an ordinary origin.
+  // The visitor's temporary account lives while the page sends it a keep-alive every 10 minutes and is deleted
+  // 30 minutes after the last one. A phone freezes a background tab, keep-alives included, so a player who comes
+  // back after half an hour returns to a page whose account is gone. The SDK notices (a refused keep-alive or token
+  // refresh signs the session out) but cannot make a new account by itself; sessionLost() below does that part:
+  // it closes the old connection, signs out, and puts the opening dialog back so walking in starts a fresh account.
+  let skapi = null;    // one SDK instance for the life of the page
+  let myUser = null;
+  let lost = false;    // the account ended; the opening dialog is back up and the next walk-in reconnects
+  async function openRealtime() {
+    await skapi.connectRealtime(onRealtime);
+    await skapi.joinRealtime({ group: GROUP });
+  }
+  async function connectSkapi() {
+    if (typeof Skapi !== 'function') throw new Error('Skapi SDK not loaded');
+    if (!skapi) skapi = new Skapi(SKAPI_PROJECT_ID, { autoLogin: true });
+    if (!(await skapi.verifyAnonymousSession())) await skapi.anonymousLogin(); // a restored account that was swept comes back as null
+    try { await openRealtime(); }
+    catch (e) {
+      if (skapi.user) throw e;       // the account is fine; the network is not. connect() tries again later
+      await skapi.anonymousLogin();  // the account died between the check and the connection: start a fresh one
+      await openRealtime();
+    }
+    myUser = skapi.user && skapi.user.user_id;
+    net.transport = 'skapi';
+    net.sendFn = (d) => skapi.postRealtime(Object.assign({ id: myId }, d), GROUP);
+    net.leaveFn = () => { try { skapi.closeRealtime(); } catch (e) { /* ignore */ } };
+    net.status('live', 'Shared lake');
+    net.dirty = true;
+  }
+  function onRealtime(rt) {
+      if (!rt || lost) return;
+      if (rt.type === 'message') {
+        if (rt.sender_rid && rt.sender_rid !== GROUP) return;
+        let m = rt.message;
+        if (typeof m === 'string') { try { m = JSON.parse(m); } catch (e) { return; } }
+        if (!m || typeof m !== 'object' || m.id === myId) return;
+        const key = (rt.sender_cid || rt.sender || m.id || '').toString();
+        if (!key) return;
+        applyPeer(key, m, rt.sender || null);
+      } else if (rt.type === 'notice') {
+        if (rt.sender_rid && rt.sender_rid !== GROUP) return;
+        if (rt.code === 'USER_JOINED') { if (rt.sender !== myUser) { net.dirty = true; net.lastFull = 0; } }
+        else if (rt.code === 'USER_LEFT' || rt.code === 'USER_DISCONNECTED') { if (rt.sender_cid) removePeer(rt.sender_cid); else if (rt.sender) removePeersByUid(rt.sender); }
+      } else if (rt.type === 'error' && !skapi.user) {
+        sessionLost(); // the SDK signed the session out: the account is gone
+      } else if (rt.type === 'close' || rt.type === 'error' || rt.type === 'reconnect') {
+        net.status('connecting', 'Reconnecting'); // 'reconnect' means an attempt is scheduled, not that it worked
+      } else if (rt.type === 'success') {
+        net.status('live', 'Shared lake'); net.dirty = true; net.lastFull = 0;
+      }
+  }
+  async function sessionLost() {
+    if (lost || net.transport !== 'skapi') return;
+    lost = true;
+    net.sendFn = null; net.transport = null;
+    net.status('connecting', 'Not connected');
+    for (const id of [...peers.keys()]) removePeer(id);
+    try { await skapi.closeRealtime(); } catch (e) { /* already closed */ }
+    try { if (skapi.user) await skapi.logout(); } catch (e) { /* signed out locally either way */ }
+    leaveLake();
+  }
+  // Is the account still there? A forced token refresh is refused for a deleted account, and the SDK then signs
+  // out; a network failure leaves the session in place. Run when the page comes back after a long absence.
+  async function checkAccount() {
+    if (!skapi || lost || net.transport !== 'skapi') return;
+    try { await skapi.getProfile({ refreshToken: true }); } catch (e) { /* judged by skapi.user below */ }
+    if (!skapi.user) sessionLost();
+  }
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    const away = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = 0;
+    if (away > 4 * 60000) checkAccount();
+  });
+  // whatever path the SDK took to sign out (a refused keep-alive, a failed refresh), the game follows within seconds
+  setInterval(() => { if (skapi && net.transport === 'skapi' && !lost && !skapi.user) sessionLost(); }, 4000);
+
+  // Transport B: the claude.ai artifact viewer's room (signed-in viewers of this page). Presence carries the state.
+  async function connectRoom() {
+    const room = await window.claude.use('room');
+    if (!room) throw new Error('room unavailable');
+    let lake;
+    try { lake = await room.join(GROUP); } catch (e) { lake = room; }
+    lake.onPeers((change) => {
+      for (const p of change.peers) {
+        if (p.isMe) continue;
+        const d = p.presence && p.presence.lake;
+        if (d) applyPeer(p.peer, d, p.by || null);
+      }
+      for (const p of change.left) removePeer(p.peer);
+    }, () => { net.status('solo', 'On your own'); net.sendFn = null; });
+    lake.onConnection((c) => { net.status(c ? 'live' : 'connecting', c ? 'Shared lake' : 'Reconnecting'); if (c) net.dirty = true; });
+    net.transport = 'room';
+    net.sendFn = (d) => lake.presence({ lake: d });
+    net.leaveFn = () => lake.leave && lake.leave();
+  }
+
+  let connecting = false, retryT = 0, soloNoted = false;
+  async function connect() {
+    clearTimeout(retryT);
+    if (connecting) return;
+    connecting = true;
+    const inViewer = !!(window.claude && typeof window.claude.use === 'function');
+    const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+    try {
+      if (inViewer) await Promise.race([connectRoom(), timeout(12000)]);
+      else await Promise.race([connectSkapi(), timeout(15000)]);
+    } catch (e) {
+      if (net.mode !== 'live') {
+        net.status('solo', 'On your own');
+        if (!soloNoted) { soloNoted = true; log('The lake is yours alone right now. Others can still join later if the connection comes back.', 'sys'); }
+        // a failed first connection used to be final; keep trying quietly, so the lake fills in once the network is back
+        if (!inViewer) retryT = setTimeout(() => { if (net.mode !== 'live' && !lost) connect(); }, 20000);
+      }
+      console.warn('Stillwater Lake: multiplayer unavailable,', e && (e.message || e.code || e));
+    } finally { connecting = false; }
+  }
+  addEventListener('pagehide', () => { if (net.leaveFn) { try { net.leaveFn(); } catch (e) { /* ignore */ } } });
+
+  // ---------------------------------------------------------------- jumping fish (ambient)
+  const jumper = { mesh: null, t: 2, from: null, to: null, timer: rand(5, 12) };
+  (function () {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), new THREE.MeshStandardMaterial({ color: 0x9bb3b8, metalness: 0.5, roughness: 0.3 }));
+    m.scale.set(1, 0.6, 2.2); m.visible = false; scene.add(m); jumper.mesh = m;
+  })();
+  function jumperTick(dt) {
+    if (reducedMotion) return;
+    if (jumper.t < 1) {
+      jumper.t += dt / 0.8;
+      const p = Math.min(1, jumper.t);
+      const x = lerp(jumper.from.x, jumper.to.x, p), z = lerp(jumper.from.z, jumper.to.z, p), y = Math.sin(p * Math.PI) * 1.1;
+      jumper.mesh.position.set(x, y, z);
+      jumper.mesh.rotation.y = Math.atan2(jumper.to.x - jumper.from.x, jumper.to.z - jumper.from.z);
+      jumper.mesh.rotation.x = lerp(-0.9, 0.9, p);
+      if (p >= 1) { jumper.mesh.visible = false; ripple(x, z); }
+    } else {
+      jumper.timer -= dt;
+      if (jumper.timer <= 0) {
+        const a = Math.random() * TAU, r = Math.random() * (LAKE_R - 6);
+        jumper.from = { x: Math.cos(a) * r, z: Math.sin(a) * r };
+        jumper.to = { x: jumper.from.x + rand(-1.5, 1.5), z: jumper.from.z + rand(-1.5, 1.5) };
+        jumper.t = 0; jumper.timer = rand(6, 16); jumper.mesh.visible = true; ripple(jumper.from.x, jumper.from.z);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- photos: snap the lake and share it
+  // The WebGL canvas keeps its picture only until the next frame is drawn, so the camera button asks the main loop
+  // for a shot and the copy is made straight after a render. The HUD is HTML on top of the canvas, so it never
+  // ends up in the photo; a small caption with the player's name goes in the corner instead.
+  let photoWanted = false, photoBlob = null, photoUrl = '', photoName = '';
+  function takePhoto() {
+    if (!entered || !$('photo').hidden || !$('leave').hidden) return;
+    if (inApp) { keys.clear(); clearTarget(); $('leave').hidden = false; return; } // no saving or sharing in here: offer the real browser
+    photoWanted = true;
+  }
+  function closeLeave() { $('leave').hidden = true; }
+  function snapPhoto() {
+    const w = canvas.width, h = canvas.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g2 = c.getContext('2d');
+    g2.drawImage(canvas, 0, 0);
+    const s = Math.max(1, h / 720), text = me.name + ' at Stillwater Lake';
+    g2.font = '700 ' + Math.round(17 * s) + 'px "Atkinson Hyperlegible", Arial, sans-serif';
+    const pad = Math.round(14 * s), bw = g2.measureText(text).width + 24 * s, bh = 34 * s;
+    g2.fillStyle = 'rgba(11,26,32,0.55)'; g2.fillRect(pad, h - pad - bh, bw, bh);
+    g2.fillStyle = '#fbf5ea'; g2.textBaseline = 'middle'; g2.fillText(text, pad + 12 * s, h - pad - bh / 2);
+    const fl = $('flash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60); // the shutter
+    c.toBlob((b) => { if (b) showPhoto(b); else log('A photo could not be taken in this browser.', 'sys'); }, 'image/jpeg', 0.9);
+  }
+  const photoFile = () => new File([photoBlob], photoName, { type: 'image/jpeg' });
+  function canShareFile() { try { return !!(navigator.canShare && navigator.canShare({ files: [photoFile()] })); } catch (e) { return false; } }
+  function showPhoto(blob) {
+    photoBlob = blob;
+    const d = new Date(), two = (n) => String(n).padStart(2, '0');
+    photoName = 'stillwater-lake-' + d.getFullYear() + two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds()) + '.jpg';
+    if (photoUrl) URL.revokeObjectURL(photoUrl);
+    photoUrl = URL.createObjectURL(blob);
+    $('photo-img').src = photoUrl;
+    $('photo-share').hidden = !canShareFile(); // browsers that cannot hand a file to other apps just get Save
+    $('photo-hint').textContent = isTouch ? 'You can also press and hold the photo to save it.' : '';
+    keys.clear(); clearTarget();
+    $('photo').hidden = false;
+  }
+  function closePhoto() { $('photo').hidden = true; }
+  function savePhoto() {
+    const a = document.createElement('a'); a.href = photoUrl; a.download = photoName;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  tapify($('photobtn'), takePhoto);
+  tapify($('photo-close'), closePhoto);
+  tapify($('leave-close'), closeLeave);
+  $('leave').addEventListener('click', (e) => { if (e.target === $('leave')) closeLeave(); });
+  tapify($('photo-save'), savePhoto);
+  tapify($('photo-share'), () => {
+    // the share sheet needs the tap's own user activation, which is why sharing waits for this button
+    navigator.share({ files: [photoFile()], title: 'Stillwater Lake', text: me.name + ' at Stillwater Lake' }).catch((e) => { if (e && e.name !== 'AbortError') savePhoto(); });
+  });
+  $('photo').addEventListener('click', (e) => { if (e.target === $('photo')) closePhoto(); }); // a tap on the dim backdrop closes it
+
+  // ---------------------------------------------------------------- main loop
+  let entered = false;
+  function enterLake() {
+    if (entered) return;
+    applyName($('wname').value);
+    entered = true; $('welcome').classList.add('gone'); document.body.classList.add('entered');
+    dropFocus();
+    setTimeout(() => { if (entered) $('welcome').hidden = true; }, 600);
+    if (lost) { // back after the old account ended: a new temporary account and a new connection
+      lost = false; $('wnote').hidden = true;
+      log('Welcome back. Reconnecting you to the lake.', 'sys');
+      connect();
+    } else log('Welcome to Stillwater Lake. The dock is the best spot.', 'sys');
+    net.dirty = true;
+  }
+  tapify($('enter'), enterLake);
+  // the account ended while the player was away: out of the lake and back to the opening dialog
+  function leaveLake() {
+    if (F.phase !== 'idle') { F.phase = 'idle'; F.bobber = null; }
+    clearTarget(); keys.clear(); openCust(false); closePhoto(); closeLeave(); standUp(); me.danceUntil = 0;
+    $('tally').classList.remove('open');
+    entered = false; document.body.classList.remove('entered');
+    $('wname').value = me.name; $('wnote').hidden = false;
+    const w = $('welcome'); w.hidden = false; w.classList.remove('gone');
+  }
+
+  const clock = new THREE.Clock();
+  let time = 0;
+  const camTarget = new THREE.Vector3();
+  let frameNo = 0, lastStep = 0;
+  function frame() {
+    requestAnimationFrame(frame);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    time += dt;
+    const now = performance.now();
+
+    // movement: forward is wherever the character faces; the camera rides behind
+    let fwd = 0, turn = 0;
+    if (entered) {
+      if (keys.has('KeyW') || keys.has('ArrowUp')) fwd += 1;
+      if (keys.has('KeyS') || keys.has('ArrowDown')) fwd -= 1;
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) turn += 1;
+      if (keys.has('KeyD') || keys.has('ArrowRight')) turn -= 1;
+    }
+    if (turn) { me.yaw += turn * 2.4 * dt; cam.yaw = me.yaw; }
+    let running = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    let moving = false;
+    const wade = swimming(me.x, me.z) ? 0.55 : onWater(me.x, me.z) ? 0.7 : 1; // water is slow going: wading a little, swimming more
+    const step = (dx, dz) => { me.x += dx; me.z += dz; }; // campfires, the dock and the water are all walk-through
+    if (fwd) {
+      clearTarget();
+      const speed = (running ? 7.2 : 4.0) * wade * fwd;
+      step(Math.sin(me.yaw) * speed * dt, Math.cos(me.yaw) * speed * dt);
+      moving = true;
+    } else if (moveTarget) {
+      const dx = moveTarget.x - me.x, dz = moveTarget.z - me.z, d = Math.hypot(dx, dz);
+      if (d < 0.2) clearTarget();
+      else {
+        running = d > 10;
+        const speed = Math.min((running ? 7.2 : 4.0) * wade, d / dt);
+        step(dx / d * speed * dt, dz / d * speed * dt);
+        me.yaw = angleLerp(me.yaw, Math.atan2(dx, dz), 1 - Math.pow(0.002, dt)); moving = true;
+      }
+    }
+    // crossing a tile edge: wrap to the opposite side and carry the camera and any walk target along, so nothing visibly jumps
+    const wx = wrapCoord(me.x), wz = wrapCoord(me.z);
+    if (wx !== me.x || wz !== me.z) {
+      const dx = wx - me.x, dz = wz - me.z;
+      me.x = wx; me.z = wz; camera.position.x += dx; camera.position.z += dz;
+      if (moveTarget) { moveTarget.x += dx; moveTarget.z += dz; marker.position.x += dx; marker.position.z += dz; }
+      if (F.castFrom) { F.castFrom.x += dx; F.castFrom.z += dz; }
+      net.dirty = true;
+    }
+    fishingTick(dt);
+    me.state = F.phase === 'cast' ? 'cast' : (F.phase === 'wait' || F.phase === 'bite') ? 'fish' : F.phase === 'reel' ? 'reel' : moving ? (running ? 'run' : 'walk') : 'idle';
+    me.dancing = me.danceUntil > now;
+    if (moving) standUp(); // walking off stands you up
+    const wasEating = me.eating; me.eating = me.sitting && me.eatUntil > now;
+    if (wasEating !== me.eating) net.dirty = true;
+    me.y = groundY(me.x, me.z);
+    myChar.g.position.set(me.x, me.y, me.z);
+    myChar.g.rotation.y = me.yaw;
+    animate(myChar, me.state, F.phase === 'cast' ? Math.min(1, F.t / 0.9) : 0, F.bobber, time, me.dancing, swimming(me.x, me.z), me.sitting ? (me.eating ? 2 : 1) : 0);
+    if (entered) { fishingPrompt(); actions = computeActions(); renderActions(); }
+    if (moving && now - lastStep > 380 && onWater(me.x, me.z)) { lastStep = now; ripple(me.x, me.z); } // wading and swimming stir the surface
+    waterUniforms.me.value.set(me.x, me.z, onWater(me.x, me.z) ? clamp(-me.y / 1.2, 0, 1) : 0); // the deeper in, the clearer the water right around the player
+
+    // peers
+    for (const [id, p] of peers) {
+      if (net.transport === 'skapi' && now - p.last > 12000) { removePeer(id); continue; }
+      const k = 1 - Math.pow(0.0005, dt);
+      p.x = lerp(p.x, p.tx, k); p.z = lerp(p.z, p.tz, k); p.yaw = angleLerp(p.yaw, p.tyaw, k);
+      // draw each peer at whichever repeat of the world is nearest to me
+      const vx = p.x + Math.round((me.x - p.x) / TILE) * TILE, vz = p.z + Math.round((me.z - p.z) / TILE) * TILE;
+      p.ch.g.position.set(vx, groundY(p.x, p.z), vz); p.ch.g.rotation.y = p.yaw;
+      const dist = Math.hypot(p.tx - p.x, p.tz - p.z);
+      const st = (p.state === 'walk' || p.state === 'run') && dist < 0.02 ? 'idle' : p.state;
+      animate(p.ch, st, (time % 0.9) / 0.9, p.bobber, time, p.dance, swimming(p.x, p.z), p.sit);
+    }
+
+    // camera: eases in behind the character whenever they turn on their own. A swipe or drag only moves the view,
+    // never the character; the view stays where it was put while they stand still, and swings back behind them once they walk.
+    cam.yaw = angleLerp(cam.yaw, me.yaw, 1 - Math.pow(0.01, dt));
+    if (!cam.held && moving) cam.orbit = lerp(cam.orbit, 0, 1 - Math.pow(0.03, dt));
+    const viewYaw = cam.yaw + cam.orbit;
+    camTarget.set(me.x, me.y + 1.25, me.z);
+    const cx = me.x - Math.sin(viewYaw) * Math.cos(cam.pitch) * cam.dist;
+    const cz = me.z - Math.cos(viewYaw) * Math.cos(cam.pitch) * cam.dist;
+    let cy = me.y + 1.25 + Math.sin(cam.pitch) * cam.dist;
+    const floor = Math.max(groundY(cx, cz), 0) + (onWater(me.x, me.z) ? 1.0 : 0.6); // the camera stays clear of the surface while the player is in the water
+    if (cy < floor) cy = floor;
+    camera.position.lerp(tmpV3.set(cx, cy, cz), 1 - Math.pow(0.0001, dt));
+    camera.lookAt(camTarget);
+    sun.target.position.set(me.x, 0, me.z); sun.position.copy(sunDir).multiplyScalar(80).add(sun.target.position);
+
+    // ambient
+    applyDaylight();
+    waterUniforms.time.value = time;
+    if (marker.visible) { const ms = 1 + Math.sin(time * 6) * 0.12; marker.scale.set(ms, ms, 1); }
+    for (const r of rippleSlots) if (r.z > 0) { r.z += dt; if (r.z > 5) r.z = -9; }
+    // fires and grills are drawn at whichever repeat of the world is nearest, so one built just over the ridge
+    // does not vanish to the far side of the map
+    for (const f of fires.values()) f.g.position.set(Math.round((me.x - f.x) / TILE) * TILE, 0, Math.round((me.z - f.z) / TILE) * TILE);
+    for (const gr of grills.values()) gr.g.position.set(Math.round((me.x - gr.x) / TILE) * TILE, 0, Math.round((me.z - gr.z) / TILE) * TILE);
+    if (!reducedMotion) {
+      for (const f of fires.values()) {
+        const tt = time + f.phase;
+        const fl = 1 + Math.sin(tt * 17) * 0.08 + Math.sin(tt * 31) * 0.05;
+        f.flame.scale.set(fl, 1 + (fl - 1) * 2, fl); f.flame2.scale.set(1 / fl, fl, 1 / fl);
+        f.flame.rotation.y = tt * 2; f.light.intensity = 2.0 + Math.sin(tt * 23) * 0.35 + Math.sin(tt * 7) * 0.2;
+      }
+      for (const p of pickups) if (p.taken && now - p.taken > 90000) { p.taken = 0; p.mesh.visible = true; }
+      const mp = motes.geometry.attributes.position;
+      for (let i = 0; i < mp.count; i++) { mp.setY(i, mp.getY(i) + Math.sin(time * 0.7 + i) * 0.002); mp.setX(i, mp.getX(i) + Math.cos(time * 0.3 + i * 0.3) * 0.004); }
+      mp.needsUpdate = true;
+    }
+    jumperTick(dt);
+    net.tick(now, moving);
+    frameNo++;
+    if (!entered && frameNo % 3) return; // the welcome card is up: a third of the frames is plenty, keep the main thread free for taps
+    renderer.render(scene, camera);
+    if (photoWanted) { photoWanted = false; snapPhoto(); } // read the picture back while it is still in the canvas
+  }
+
+  // hot-reload friendliness inside the viewer
+  function start(data) {
+    if (data && typeof data.x === 'number' && typeof data.z === 'number' && isFinite(data.x) && isFinite(data.z)) { me.x = data.x; me.z = data.z; me.yaw = data.yaw || me.yaw; }
+    if (data && data.entered) enterLake();
+    frame();
+    connect();
+  }
+  try {
+    if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => ({ x: me.x, z: me.z, yaw: me.yaw, entered }));
+    if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start); else start((window.claude && window.claude.hot && window.claude.hot.data) || {});
+  } catch (e) { start({}); }
+})();
+</script>
+</body>
+</html>
